@@ -67,8 +67,27 @@ describe('MIDI import', () => {
     const midi = file((m) => drums(m, [[36, 0], [39, 4 * S], [39, 12 * S], [54, 8 * S], [38, 4 * S]]));
     const { draft, unmapped } = midiToDraft(midi);
     expect(unmapped).toEqual([{ note: 39, count: 2 }, { note: 54, count: 1 }]);
-    expect(draft.warnings.join(' ')).toContain('Left out 3 notes with no pad: note 39 (2×), note 54 (1×)');
+    expect(draft.warnings.join(' ')).toContain('Left out 3 notes with no pad: note 39 (Hand Clap) 2×, note 54 (Tambourine) 1×');
     expect(draft.text).toContain('KK: x---');
+  });
+
+  it('a per-import note map puts a note with no pad on a chosen pad, or ignores it', () => {
+    const midi = file((m) => drums(m, [[36, 0], [56, 2 * S], [56, 6 * S], [54, 8 * S], [12, 10 * S]]));
+    const noteMap = new Map([[56, 'ride'], [54, 'ignore']] as const);
+    const { draft, unmapped, noPad } = midiToDraft(midi, { noteMap });
+    expect(noPad).toEqual([
+      { note: 12, count: 1, mappedTo: null },
+      { note: 54, count: 1, mappedTo: 'ignore' },
+      { note: 56, count: 2, mappedTo: 'ride' },
+    ]);
+    // Only note 12 is still left out (and General MIDI has no name for it).
+    expect(unmapped).toEqual([{ note: 12, count: 1 }]);
+    expect(draft.warnings.join(' ')).toContain('Left out 1 note with no pad: note 12 1×.');
+    const { notes } = parseLessonText(draft.text, { beatsPerBar: 4, subdivision: 'sixteenth' });
+    expect(notes.filter((n) => n.pad === 'ride').map((n) => [n.beat, n.subdivision])).toEqual([[0, 2], [1, 2]]);
+    // The map never changes the built-in notes, and an empty map is the default import.
+    expect(midiToDraft(midi, { noteMap: new Map([[36, 'snare']]) }).draft.text).toContain('KK: x---');
+    expect(midiToDraft(midi).unmapped.map((u) => u.note)).toEqual([12, 54, 56]);
   });
 
   it('a bar range pulls a fill out of a longer song, landing included', () => {

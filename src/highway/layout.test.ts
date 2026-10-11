@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ANY_HIHAT } from '../grading';
 import { FILL_LESSONS, STARTER_LESSONS } from '../lessons';
-import { KIT_ORDER, computeLayout, laneCenterY, laneForPad, lanesForLesson, lanesForPads, noteToX, visibleTimeRange } from './layout';
+import { FIT_MARGIN, KIT_ORDER, MIN_PX_PER_BEAT, computeLayout, fitLayout, laneCenterY, laneForPad, lanesForLesson, lanesForPads, noteToX, scrollFitLayout, visibleTimeRange } from './layout';
 import { PADS } from '../input';
 
 describe('noteToX', () => {
@@ -105,5 +105,41 @@ describe('lanes', () => {
     expect(laneForPad('hihatOpen', lanes)).toBe(-1);
     expect(laneForPad('hihatOpen', lanes, [ANY_HIHAT])).toBe(0);
     expect(laneForPad('tom1', lanes, [ANY_HIHAT])).toBe(-1);
+  });
+});
+
+describe('scrollFitLayout', () => {
+  const base = computeLayout(696, 200, 4); // 600 px of note area right of the 96 px labels
+  const area = 600 - 2 * FIT_MARGIN;
+
+  it('fits like fitLayout when the span is readable at full width', () => {
+    // 4 beats at 120 BPM = 2000 ms; 576 px / 4 beats = 144 px per beat.
+    const r = scrollFitLayout(base, 0, 2000, MIN_PX_PER_BEAT / 500);
+    expect(r.scrolls).toBe(false);
+    expect(r.layout).toEqual(fitLayout(base, 0, 2000));
+    expect(r.contentWidth).toBe(696);
+  });
+
+  it('a dense span scrolls at the minimum zoom, with the content width it needs', () => {
+    // 64 bars of 4/4 at 120 BPM: 256 beats, 128 s. Fitted it would be 2.25 px per beat.
+    const minPxPerMs = MIN_PX_PER_BEAT / 500;
+    const r = scrollFitLayout(base, 0, 128_000, minPxPerMs);
+    expect(r.scrolls).toBe(true);
+    expect(r.layout.pxPerMs).toBe(minPxPerMs);
+    expect(r.contentWidth).toBeCloseTo(96 + 2 * FIT_MARGIN + 256 * 40);
+    expect(noteToX(0, 0, r.layout)).toBe(96 + FIT_MARGIN);
+    expect(area / 256).toBeLessThan(MIN_PX_PER_BEAT);
+  });
+
+  it('scrolling moves the picture left and is clamped to the content', () => {
+    const minPxPerMs = MIN_PX_PER_BEAT / 500;
+    const r = scrollFitLayout(base, 0, 128_000, minPxPerMs, 1000);
+    expect(r.scrollX).toBe(1000);
+    expect(noteToX(0, 0, r.layout)).toBe(96 + FIT_MARGIN - 1000);
+    const end = scrollFitLayout(base, 0, 128_000, minPxPerMs, 1e9);
+    expect(end.scrollX).toBeCloseTo(end.contentWidth - 696);
+    // At the far end the last moment sits just inside the right margin.
+    expect(noteToX(128_000, 0, end.layout)).toBeCloseTo(696 - FIT_MARGIN);
+    expect(scrollFitLayout(base, 0, 128_000, minPxPerMs, -50).scrollX).toBe(0);
   });
 });

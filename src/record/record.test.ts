@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Hit } from '../input';
 import { parseLessonText, type LessonNote } from '../lessons';
-import { CustomLessonStore, customLesson, isCustomLesson, landingFocus, type CustomLessonData, type StorageLike } from './customLessons';
+import { CustomLessonStore, customLesson, isCustomLesson, landingFocus, readLegacyLessons, removeLegacyLessons, type CustomLessonData, type LessonBackend, type StorageLike } from './customLessons';
 import { gridStepMs, notesToText, quantizeHits, type RecordGrid } from './quantize';
 
 const hit = (pad: Hit['pad'], time: number, velocity = 90) => ({ pad, time, velocity });
@@ -122,15 +122,31 @@ describe('record round trip', () => {
 /** In-memory storage, optionally throwing like a blocked localStorage. */
 function memoryStorage(throws = false): StorageLike & { data: Map<string, string> } {
   const data = new Map<string, string>();
+  const guard = () => {
+    if (throws) throw new DOMException('blocked', 'SecurityError');
+  };
   return {
     data,
-    getItem: (k) => {
-      if (throws) throw new DOMException('blocked', 'SecurityError');
-      return data.get(k) ?? null;
+    getItem: (k) => (guard(), data.get(k) ?? null),
+    setItem: (k, v) => (guard(), void data.set(k, v)),
+    removeItem: (k) => (guard(), void data.delete(k)),
+  };
+}
+
+/** A backend that keeps what was written, like the database across a reload; `fails` makes every write fail. */
+function memoryBackend(fails = false): LessonBackend & { data: Map<string, CustomLessonData> } {
+  const data = new Map<string, CustomLessonData>();
+  return {
+    data,
+    put: async (d) => {
+      if (fails) throw new Error('quota');
+      data.set(d.id, d);
+      return true;
     },
-    setItem: (k, v) => {
-      if (throws) throw new DOMException('blocked', 'SecurityError');
-      data.set(k, v);
+    delete: async (id) => {
+      if (fails) throw new Error('quota');
+      data.delete(id);
+      return true;
     },
   };
 }
@@ -138,68 +154,81 @@ function memoryStorage(throws = false): StorageLike & { data: Map<string, string
 const sample = (id: string, title = 'My fill'): CustomLessonData => ({ id, title, bpm: 70, bars: 1, beatsPerBar: 4, subdivision: 'sixteenth', text: 'SN: x-x-x-x-xxxxxxxx\nKK: x-------x-------' });
 
 describe('CustomLessonStore', () => {
-  it('saves, loads (in a new store, like after a reload) and deletes', () => {
-    const storage = memoryStorage();
-    const store = new CustomLessonStore(() => storage);
-    const { lesson, persisted } = store.save(sample('my-a', 'Fill A'));
+  it('saves, loads (in a new store, like after a reload) and deletes', async () => {
+    const backend = memoryBackend();
+    const store = new CustomLessonStore([], backend);
+    const { lesson, persisted } = await store.save(sample('my-a', 'Fill A'));
     expect(persisted).toBe(true);
     expect(lesson).toMatchObject({ id: 'my-a', title: 'Fill A', category: 'fill', bars: 1, defaultBpm: 70 });
     expect(lesson.focus).toEqual({ start: { bar: 0, beat: 0, subdivision: 0 }, end: { bar: 0, beat: 3, subdivision: 3 } });
     expect(isCustomLesson(lesson)).toBe(true);
-    store.save(sample('my-b', 'Fill B'));
+    await store.save(sample('my-b', 'Fill B'));
 
-    const reloaded = new CustomLessonStore(() => storage);
+    const reloaded = new CustomLessonStore([...backend.data.values()], backend);
     expect(reloaded.list().map((l) => l.title)).toEqual(['Fill A', 'Fill B']);
-    expect(reloaded.remove('my-a')).toEqual({ removed: true, persisted: true });
-    expect(reloaded.remove('my-a').removed).toBe(false);
-    expect(new CustomLessonStore(() => storage).list().map((l) => l.id)).toEqual(['my-b']);
+    expect(await reloaded.remove('my-a')).toEqual({ removed: true, persisted: true });
+    expect((await reloaded.remove('my-a')).removed).toBe(false);
+    expect(new CustomLessonStore([...backend.data.values()]).list().map((l) => l.id)).toEqual(['my-b']);
   });
 
-  it('stores kind, focus and origin; old entries without them still load as whole-bar fills', () => {
-    const storage = memoryStorage();
-    const store = new CustomLessonStore(() => storage);
-    store.save({ ...sample('my-f'), bars: 2, text: 'SN: x-x-x-x-xxxxxxxx | ----------------\nCR: ---------------- | x---------------', focus: landingFocus(2) });
-    store.save({ ...sample('my-s', 'Song'), kind: 'song', origin: 'midi', bars: 5, text: 'KK: ' + Array(5).fill('x---x---x---x---').join(' | ') });
-    const [fill, song] = new CustomLessonStore(() => storage).list();
+  it('stores kind, focus and origin; old entries without them still load as whole-bar fills', async () => {
+    const backend = memoryBackend();
+    const store = new CustomLessonStore([], backend);
+    await store.save({ ...sample('my-f'), bars: 2, text: 'SN: x-x-x-x-xxxxxxxx | ----------------\nCR: ---------------- | x---------------', focus: landingFocus(2) });
+    await store.save({ ...sample('my-s', 'Song'), kind: 'song', origin: 'midi', bars: 5, text: 'KK: ' + Array(5).fill('x---x---x---x---').join(' | ') });
+    const [fill, song] = new CustomLessonStore([...backend.data.values()]).list();
     expect(fill!.focus!.end).toEqual({ bar: 1, beat: 0, subdivision: 0 });
     expect(song).toMatchObject({ category: 'song', bars: 5 });
     expect(song!.focus).toBeUndefined();
     expect(song!.description).toBe('Your imported song, at 70 BPM. Pick bars to loop below.');
   });
 
-  it('a bad text is rejected before anything is stored', () => {
-    const storage = memoryStorage();
-    const store = new CustomLessonStore(() => storage);
+  it('a bad text is rejected (synchronously) before anything is stored', () => {
+    const backend = memoryBackend();
+    const store = new CustomLessonStore([], backend);
     expect(() => store.save({ ...sample('my-x'), text: 'SN: x-x' })).toThrow(/steps/);
     expect(store.list()).toEqual([]);
-    expect(storage.data.size).toBe(0);
+    expect(backend.data.size).toBe(0);
   });
 
-  it('keeps working when localStorage throws or is missing: lessons last for the page session', () => {
-    for (const getter of [() => memoryStorage(true), () => null, () => { throw new DOMException('blocked', 'SecurityError'); }]) {
-      const store = new CustomLessonStore(getter as () => StorageLike | null);
-      expect(store.list()).toEqual([]);
-      const saved = store.save(sample('my-a'));
+  it('keeps working when the backend fails or is missing: lessons last for the page session', async () => {
+    for (const backend of [memoryBackend(true), null]) {
+      const store = new CustomLessonStore([], backend);
+      const saved = await store.save(sample('my-a'));
       expect(saved.persisted).toBe(false);
       expect(store.list().map((l) => l.id)).toEqual(['my-a']);
-      expect(store.remove('my-a')).toEqual({ removed: true, persisted: false });
+      expect(await store.remove('my-a')).toEqual({ removed: true, persisted: false });
       expect(store.list()).toEqual([]);
     }
   });
 
-  it('skips damaged entries and junk', () => {
-    const storage = memoryStorage();
-    storage.data.set('drumly.customLessons', JSON.stringify([sample('my-ok'), { id: 'my-bad' }, { ...sample('my-text'), text: 'nonsense' }, 'x']));
-    expect(new CustomLessonStore(() => storage).list().map((l) => l.id)).toEqual(['my-ok']);
-    storage.data.set('drumly.customLessons', '{not json');
-    expect(new CustomLessonStore(() => storage).list()).toEqual([]);
+  it('skips damaged entries', () => {
+    const store = new CustomLessonStore([sample('my-ok'), { id: 'my-bad' } as unknown as CustomLessonData, { ...sample('my-text'), text: 'nonsense' }]);
+    expect(store.list().map((l) => l.id)).toEqual(['my-ok']);
   });
 
-  it('new ids never collide', () => {
-    const storage = memoryStorage();
-    const store = new CustomLessonStore(() => storage);
+  it('new ids never collide', async () => {
+    const store = new CustomLessonStore();
     const id = store.newId(1000);
-    store.save(sample(id));
+    await store.save(sample(id));
     expect(store.newId(1000)).not.toBe(id);
+  });
+});
+
+describe('legacy localStorage lessons', () => {
+  it('reads the old key, skipping damaged entries and junk', () => {
+    const storage = memoryStorage();
+    expect(readLegacyLessons(() => storage)).toEqual({ items: [], found: false });
+    storage.data.set('drumly.customLessons', JSON.stringify([sample('my-ok'), { id: 'my-bad' }, 'x']));
+    expect(readLegacyLessons(() => storage)).toEqual({ items: [sample('my-ok')], found: true });
+    storage.data.set('drumly.customLessons', '{not json');
+    expect(readLegacyLessons(() => storage)).toEqual({ items: [], found: true });
+  });
+
+  it('blocked or missing storage reads as empty and is never fatal', () => {
+    for (const getter of [() => memoryStorage(true), () => null, () => { throw new DOMException('blocked', 'SecurityError'); }]) {
+      expect(readLegacyLessons(getter as () => StorageLike | null)).toEqual({ items: [], found: false });
+      expect(removeLegacyLessons(getter as () => StorageLike | null)).toBe(false);
+    }
   });
 });

@@ -13,7 +13,14 @@
           <div><span class="dot" id="kb-dot"></span><strong>Keyboard:</strong> <span id="kb-status">starting…</span></div>
           <div><span class="dot" id="midi-dot"></span><strong>MIDI:</strong> <span id="midi-status">starting…</span></div>
         </div>
+        <nav class="tabs" aria-label="Views">
+          <button id="tab-practice" type="button" class="tab active" aria-pressed="true">Practice</button>
+          <button id="tab-progress" type="button" class="tab" aria-pressed="false">Progress</button>
+        </nav>
+        <p id="history-notice" class="history-notice" hidden>History isn't saving in this browser (a private window or blocked storage). Practice works normally, but sessions and saved fills last only until this page is closed.</p>
       </header>
+
+      <div id="practice-view">
 
       <section class="panel lesson">
         <div class="lesson-head">
@@ -125,6 +132,7 @@
             <button id="review-discard" type="button">Discard</button>
           </div>
           <div id="review-checks" class="review-checks"></div>
+          <div id="review-map" class="review-map" hidden></div>
           <div class="review-body">
             <figure id="review-figure" class="review-figure" hidden>
               <img id="review-image" alt="The imported notation image" />
@@ -135,6 +143,15 @@
             </label>
           </div>
           <p id="review-error" class="record-error"></p>
+          <div id="review-focus" class="review-focus" hidden>
+            <span class="review-focus-label">Graded part</span>
+            <label>From bar <input id="focus-from-bar" type="number" min="1" step="1" /></label>
+            <label>beat <input id="focus-from-beat" type="number" min="1" step="1" /></label>
+            <label>To bar <input id="focus-to-bar" type="number" min="1" step="1" /></label>
+            <label>beat <input id="focus-to-beat" type="number" min="1" step="1" /></label>
+            <button id="focus-reset" type="button">Use suggested</button>
+            <span id="focus-info" class="hint"></span>
+          </div>
           <div class="record-controls">
             <label>Name <input id="review-title" type="text" maxlength="60" /></label>
             <label>BPM <input id="review-bpm" type="number" min="30" max="300" step="1" /></label>
@@ -157,6 +174,7 @@
           <button id="problem-refresh" type="button">Show problem spots</button>
         </div>
         <canvas id="highway" class="highway" aria-label="Note highway: upcoming notes scroll toward the now line"></canvas>
+        <div id="highway-scroll" class="highway-scroll" hidden aria-label="Scroll the preview sideways"><div id="highway-spacer" class="highway-spacer"></div></div>
         <div class="met-top">
           <div id="beats" class="beats" aria-label="Beat indicator"></div>
           <span id="bar-label" class="bar-label"></span>
@@ -165,6 +183,7 @@
         <p id="lesson-keys" class="hint"></p>
         <p id="lesson-status" class="grade-status"></p>
         <p id="lesson-feedback" class="lesson-feedback"></p>
+        <p id="lesson-best" class="lesson-best" aria-live="polite"></p>
         <div id="lesson-history" class="lesson-history"></div>
         <div id="compare-bar" class="compare-bar" hidden>
           <button id="compare-play" type="button">Compare</button>
@@ -270,6 +289,32 @@
         </div>
       </section>
       </details>
+      </div>
+
+      <section id="progress-view" class="panel progress" hidden>
+        <h2>This week</h2>
+        <div id="progress-overview"></div>
+        <div id="progress-lessons-wrap">
+          <h2>Lessons</h2>
+          <div id="progress-lessons"></div>
+        </div>
+        <div id="progress-detail" class="progress-detail" hidden></div>
+        <div class="backup">
+          <h2>Backup</h2>
+          <p class="hint">Download every session, your own fills and songs, and your settings as one file, or read such a file back in (nothing is duplicated). Browser storage belongs to this exact address and browser, so a backup is the way to move history elsewhere.</p>
+          <div class="backup-row">
+            <button id="history-export" type="button">Export history</button>
+            <button id="history-import" type="button">Import history</button>
+            <input id="history-file" type="file" accept=".json,application/json" hidden />
+          </div>
+          <div id="import-confirm" class="import-confirm" hidden>
+            <p id="import-summary"></p>
+            <button id="import-apply" type="button" class="primary">Import</button>
+            <button id="import-cancel" type="button">Cancel</button>
+          </div>
+          <p id="backup-status" class="grade-status"></p>
+        </div>
+      </section>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>

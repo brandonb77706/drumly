@@ -142,3 +142,30 @@ export function fitLayout(layout: HighwayLayout, from: number, to: number): High
   const nowX = layout.labelWidth + FIT_MARGIN;
   return { ...layout, nowX, pxPerMs: Math.max(0, layout.width - nowX - FIT_MARGIN) / span };
 }
+
+/** Below this many CSS px per beat a fitted picture is too dense to read, so it scrolls instead. */
+export const MIN_PX_PER_BEAT = 40;
+
+export interface ScrollFit {
+  readonly layout: HighwayLayout;
+  /** CSS px the whole span needs (labels and margins included); the canvas width when it fits. */
+  readonly contentWidth: number;
+  /** True when the span doesn't fit at `minPxPerMs` and the picture scrolls sideways. */
+  readonly scrolls: boolean;
+  /** The scroll position actually used (clamped to the content). */
+  readonly scrollX: number;
+}
+
+/**
+ * Like fitLayout, but never denser than `minPxPerMs`: a span that would need less is drawn at
+ * that zoom instead, scrolled `scrollX` CSS px to the right (clamped to the content). Draw it
+ * with now = from, as with fitLayout.
+ */
+export function scrollFitLayout(layout: HighwayLayout, from: number, to: number, minPxPerMs: number, scrollX = 0): ScrollFit {
+  const fitted = fitLayout(layout, from, to);
+  if (!(minPxPerMs > 0) || fitted.pxPerMs >= minPxPerMs) return { layout: fitted, contentWidth: layout.width, scrolls: false, scrollX: 0 };
+  const span = Math.max(1, to - from);
+  const contentWidth = layout.labelWidth + 2 * FIT_MARGIN + span * minPxPerMs;
+  const x = Math.min(Math.max(0, contentWidth - layout.width), Math.max(0, Number.isFinite(scrollX) ? scrollX : 0));
+  return { layout: { ...layout, nowX: layout.labelWidth + FIT_MARGIN - x, pxPerMs: minPxPerMs }, contentWidth, scrolls: true, scrollX: x };
+}

@@ -30,7 +30,7 @@ The kit is unavailable until about Oct 25, 2026. Until then, build and test with
 7. Post-session analysis plus Claude API coaching (Jarvis voice optional) - DONE
 8. Drum sounds, listen-then-play mode, compare replay, and record-a-fill - DONE
 9. Import fills and songs: drum notation screenshots (Claude vision), MIDI files, section looping - DONE
-10. Save sessions and chart progress over time
+10. Save sessions and chart progress over time - DONE
 11. Kit day (when the Roland is back): pad map check, latency calibration, threshold tuning
 
 ## Working rules

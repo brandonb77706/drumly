@@ -49,6 +49,9 @@ export interface LiveGraderOptions {
    * Notes more than this long before the miss deadline (now - window - grace) are settled: their
    * results are frozen and they leave the live regrade, so each hit only regrades the notes near
    * the current position, however long the song. Default 2000 ms. Infinity keeps everything live.
+   * The final summary, the coaching and saved history always come from the full grade (stop()
+   * batch-grades everything). Settling can only change live verdicts (colors, and the summary shown
+   * as each looped pass ends), and only for very sloppy playing.
    */
   settleMs?: number;
 }

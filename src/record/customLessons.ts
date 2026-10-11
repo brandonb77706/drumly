@@ -81,27 +81,31 @@ export function customLesson(data: CustomLessonData): Lesson {
   });
 }
 
-/** The parts of Storage the store uses. */
-export type StorageLike = Pick<Storage, 'getItem' | 'setItem'>;
+/** The parts of Storage the legacy reader uses. */
+export type StorageLike = Pick<Storage, 'getItem' | 'setItem'> & Partial<Pick<Storage, 'removeItem'>>;
+
+/** Where custom lessons are persisted (IndexedDB, see HistoryStore). Each call resolves to false if it wasn't saved. */
+export interface LessonBackend {
+  put(data: CustomLessonData): Promise<boolean>;
+  delete(id: string): Promise<boolean>;
+}
 
 /**
- * Custom lessons in localStorage. Every storage access is wrapped: if storage is blocked (private
- * mode, disabled site data) or throws, the store keeps working in memory for this page session,
- * and `persisted` says the change wasn't saved.
+ * Custom lessons. The list lives in memory, so reading it is instant and synchronous; changes are
+ * written through to the backend, and `persisted` says whether that worked. Without a backend (or
+ * when it fails) the lessons last for this page session.
  */
 export class CustomLessonStore {
-  private items: CustomLessonData[] | null = null;
+  private items: CustomLessonData[];
 
-  constructor(
-    /** A getter, because merely reading `window.localStorage` can throw when it's blocked. */
-    private readonly storage: () => StorageLike | null,
-    private readonly key = CUSTOM_LESSONS_KEY,
-  ) {}
+  constructor(items: readonly CustomLessonData[] = [], private readonly backend: LessonBackend | null = null) {
+    this.items = items.filter(isCustomLessonData);
+  }
 
   /** Every stored lesson that still parses, oldest first. */
   list(): Lesson[] {
     const out: Lesson[] = [];
-    for (const data of this.load()) {
+    for (const data of this.items) {
       try {
         out.push(customLesson(data));
       } catch {
@@ -111,63 +115,87 @@ export class CustomLessonStore {
     return out;
   }
 
-  /** Save (or replace, by id). The lesson is validated first, so a bad text throws and nothing is stored. */
-  save(data: CustomLessonData): { lesson: Lesson; persisted: boolean } {
-    const lesson = customLesson(data);
-    const items = this.load().filter((d) => d.id !== data.id);
-    items.push(data);
-    this.items = items;
-    return { lesson, persisted: this.write(items) };
+  /** The raw entries, for a history export. */
+  data(): CustomLessonData[] {
+    return [...this.items];
   }
 
-  /** Returns false if there was no such lesson. */
-  remove(id: string): { removed: boolean; persisted: boolean } {
-    const items = this.load();
-    const kept = items.filter((d) => d.id !== id);
-    if (kept.length === items.length) return { removed: false, persisted: true };
+  /**
+   * Save (or replace, by id). The lesson is validated first, synchronously: a bad text throws and
+   * nothing is stored.
+   */
+  save(data: CustomLessonData): Promise<{ lesson: Lesson; persisted: boolean }> {
+    const lesson = customLesson(data);
+    this.items = [...this.items.filter((d) => d.id !== data.id), data];
+    return this.write((b) => b.put(data)).then((persisted) => ({ lesson, persisted }));
+  }
+
+  /** Add or replace entries in memory only (they were already written, e.g. by a history import). */
+  merge(items: readonly CustomLessonData[]): void {
+    const incoming = items.filter(isCustomLessonData);
+    const ids = new Set(incoming.map((d) => d.id));
+    this.items = [...this.items.filter((d) => !ids.has(d.id)), ...incoming];
+  }
+
+  async remove(id: string): Promise<{ removed: boolean; persisted: boolean }> {
+    const kept = this.items.filter((d) => d.id !== id);
+    if (kept.length === this.items.length) return { removed: false, persisted: true };
     this.items = kept;
-    return { removed: true, persisted: this.write(kept) };
+    return { removed: true, persisted: await this.write((b) => b.delete(id)) };
   }
 
   /** A fresh id that no stored lesson uses. */
   newId(now = Date.now()): string {
-    const used = new Set(this.load().map((d) => d.id));
+    const used = new Set(this.items.map((d) => d.id));
     let n = now;
     while (used.has(`${CUSTOM_ID_PREFIX}${n.toString(36)}`)) n++;
     return `${CUSTOM_ID_PREFIX}${n.toString(36)}`;
   }
 
-  private load(): CustomLessonData[] {
-    if (this.items) return this.items;
-    let raw: string | null = null;
+  private async write(op: (backend: LessonBackend) => Promise<boolean>): Promise<boolean> {
+    if (!this.backend) return false;
     try {
-      raw = this.storage()?.getItem(this.key) ?? null;
-    } catch {
-      raw = null;
-    }
-    let parsed: unknown = [];
-    try {
-      parsed = raw ? JSON.parse(raw) : [];
-    } catch {
-      parsed = [];
-    }
-    this.items = Array.isArray(parsed) ? parsed.filter(isCustomLessonData) : [];
-    return this.items;
-  }
-
-  private write(items: readonly CustomLessonData[]): boolean {
-    try {
-      const storage = this.storage();
-      if (!storage) return false;
-      storage.setItem(this.key, JSON.stringify(items));
-      return true;
+      return await op(this.backend);
     } catch {
       return false;
     }
   }
 }
 
-function isCustomLessonData(v: unknown): v is CustomLessonData {
+/**
+ * Lessons saved by earlier versions in localStorage (before they moved to IndexedDB). `found` is
+ * true if the key exists at all. Damaged entries and junk are skipped; blocked storage reads as empty.
+ */
+export function readLegacyLessons(storage: () => StorageLike | null, key = CUSTOM_LESSONS_KEY): { items: CustomLessonData[]; found: boolean } {
+  let raw: string | null = null;
+  try {
+    raw = storage()?.getItem(key) ?? null;
+  } catch {
+    raw = null;
+  }
+  if (raw === null) return { items: [], found: false };
+  let parsed: unknown = [];
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    parsed = [];
+  }
+  return { items: Array.isArray(parsed) ? parsed.filter(isCustomLessonData) : [], found: true };
+}
+
+/** Remove the old localStorage key. False if storage is blocked. */
+export function removeLegacyLessons(storage: () => StorageLike | null, key = CUSTOM_LESSONS_KEY): boolean {
+  try {
+    const s = storage();
+    if (!s?.removeItem) return false;
+    s.removeItem(key);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function isCustomLessonData(v: unknown): v is CustomLessonData {
   if (typeof v !== 'object' || v === null) return false;
   const d = v as Record<string, unknown>;
   return (

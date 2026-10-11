@@ -295,3 +295,61 @@ details.record[open] > summary { margin-bottom: 8px; }
 .review-figure { flex: 0 1 420px; margin: 10px 0 0; }
 .review-figure img { display: block; max-width: 100%; max-height: 260px; border: 1px solid var(--border); border-radius: 6px; background: #fff; }
 .review-figure figcaption { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.review-map[hidden], .review-focus[hidden], .highway-scroll[hidden] { display: none; }
+.review-map { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin: 8px 0 0; font-size: 13px; }
+.review-map-label { color: var(--muted); }
+.review-map-row { display: flex; align-items: center; gap: 6px; }
+.review-map select, .review-focus input { padding: 4px 8px; background: #11141a; color: var(--text); border: 1px solid var(--border); border-radius: 6px; font: inherit; }
+.review-focus { display: flex; flex-wrap: wrap; align-items: end; gap: 6px 12px; margin: 4px 0 10px; font-size: 12px; color: var(--muted); }
+.review-focus label { display: flex; flex-direction: column; gap: 4px; }
+.review-focus input { width: 70px; font-size: 14px; }
+.review-focus-label { align-self: center; font-weight: 600; color: #7fb4ff; font-size: 13px; }
+.review-focus button { width: auto; margin: 0; padding: 5px 10px; font-size: 13px; }
+.review-focus .hint { margin: 0 0 6px; }
+.highway-scroll { overflow-x: auto; overflow-y: hidden; height: 14px; margin-top: 2px; }
+.highway-spacer { height: 1px; }
+
+/* ---- Tabs, history notice, new best ------------------------------------------ */
+.tabs { display: flex; gap: 6px; margin-top: 14px; }
+.tabs .tab { width: auto; margin: 0; padding: 6px 18px; border-color: var(--border); color: var(--muted); border-radius: 999px; }
+.tabs .tab.active { border-color: var(--accent); color: var(--accent); background: #2a1f18; }
+.history-notice[hidden], .progress[hidden], #practice-view[hidden], .progress-detail[hidden], #progress-lessons-wrap[hidden], .import-confirm[hidden] { display: none; }
+.history-notice { margin: 12px 0 0; padding: 8px 12px; border: 1px solid var(--warn); border-radius: 8px; color: var(--warn); font-size: 14px; }
+.lesson-best { margin: 4px 0 0; min-height: 1.4em; color: var(--ok); font-weight: 700; transform-origin: left center; }
+.lesson-best:empty { min-height: 0; }
+
+/* ---- Progress ---------------------------------------------------------------- */
+.progress h2 { margin-top: 18px; }
+.progress h2:first-child { margin-top: 0; }
+.chart-figure { margin: 14px 0 0; flex: 1 1 360px; min-width: 0; }
+.chart-figure figcaption { color: var(--muted); font-size: 13px; margin-bottom: 4px; }
+.chart { display: block; width: 100%; height: auto; background: #11141a; border: 1px solid var(--border); border-radius: 8px; }
+.chart .grid { stroke: #232835; stroke-width: 1; }
+.chart .axis { fill: var(--muted); font-size: 12px; }
+.chart .value { fill: var(--text); font-size: 12px; font-weight: 600; }
+.chart .bar { fill: #7fb4ff; }
+.chart .bar.today { fill: var(--accent); }
+.chart .line { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linejoin: round; }
+.chart .dot { fill: #11141a; stroke: var(--accent); stroke-width: 2.5; }
+.chart-row { display: flex; flex-wrap: wrap; gap: 0 18px; }
+.chart-empty { padding: 30px 12px; border: 1px dashed var(--border); border-radius: 8px; text-align: center; margin: 0; }
+.progress-table td .hint { margin: 0; font-size: 12px; }
+.progress-table td.trend { font-size: 18px; font-weight: 700; color: var(--muted); }
+.progress-table td.trend.up { color: var(--ok); }
+.progress-table td.trend.down { color: var(--warn); }
+button.link { width: auto; margin: 0; padding: 0; border: none; background: none; color: #7fb4ff; font-weight: 600; text-align: left; }
+button.link:hover:not(:disabled) { background: none; color: #a8cbff; text-decoration: underline; }
+button.link:disabled { border: none; }
+.detail-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+.detail-head h3 { margin: 0; font-size: 18px; }
+.detail-head .hint { margin: 0; }
+.detail-head button.back, .progress-detail > button.primary { width: auto; margin: 0; padding: 5px 12px; font-size: 13px; }
+.progress-detail > button.primary { margin-top: 12px; }
+.progress-detail .summary-stats { margin-top: 12px; }
+.session-list h3 { margin: 18px 0 6px; font-size: 15px; }
+.backup { margin-top: 22px; border-top: 1px solid var(--border); padding-top: 14px; }
+.backup-row, .import-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.backup-row button, .import-confirm button { width: auto; margin: 0; padding: 6px 14px; }
+.import-confirm { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 8px; background: #1a1714; }
+.import-confirm p { margin: 0; flex: 1 1 100%; }
+.progress-detail { margin-top: 22px; }

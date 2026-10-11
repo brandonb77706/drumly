@@ -1,5 +1,7 @@
 import { Midi } from '@tonejs/midi';
+import type { Pad } from '../input';
 import { MIDI_NOTE_TO_PAD } from '../input/padMaps';
+import { describeMidiNote } from './gmNames';
 import { MAX_FILL_BARS } from '../record/customLessons';
 import { notesToText, quantizeHits, type RecordGrid, type RecordSubdivision } from '../record/quantize';
 import type { ImportDraft } from './draft';
@@ -95,12 +97,28 @@ export interface MidiImportOptions {
   /** Default 'sixteenth'. */
   subdivision?: RecordSubdivision;
   fileName?: string;
+  /**
+   * The player's choice for note numbers that have no pad in MIDI_NOTE_TO_PAD: a pad to play
+   * them on, or 'ignore'. Only for this import; the built-in map is never changed.
+   */
+  noteMap?: ReadonlyMap<number, Pad | 'ignore'>;
+}
+
+/** A note number with no pad in MIDI_NOTE_TO_PAD, and what this import does with it. */
+export interface NoPadNote {
+  readonly note: number;
+  /** How often it was played in the chosen bars. */
+  readonly count: number;
+  /** From MidiImportOptions.noteMap; null means it was left out. */
+  readonly mappedTo: Pad | 'ignore' | null;
 }
 
 export interface MidiImport {
   readonly draft: ImportDraft;
   /** Note numbers in the chosen bars with no pad in MIDI_NOTE_TO_PAD, and how often each was played. */
   readonly unmapped: readonly { readonly note: number; readonly count: number }[];
+  /** Every note number with no built-in pad (left out, ignored, or mapped by noteMap), lowest first. */
+  readonly noPad: readonly NoPadNote[];
   /** Notes kept (after quantizing and merging). */
   readonly noteCount: number;
 }
@@ -133,25 +151,29 @@ export function midiToDraft(midi: Midi, options: MidiImportOptions = {}): MidiIm
   const startTick = (fromBar - 1) * ticksPerBar;
   const endTick = startTick + (bars + (landing ? 1 : 0)) * ticksPerBar;
   const hits = [];
-  const unmapped = new Map<number, number>();
+  const noPadCounts = new Map<number, number>();
   for (const index of trackIndices) {
     for (const note of midi.tracks[index]?.notes ?? []) {
       // A little before the range too: a note played slightly early still snaps to the first step.
       if (note.ticks < startTick - ppq / 8 || note.ticks >= endTick) continue;
-      const pad = MIDI_NOTE_TO_PAD.get(note.midi);
-      if (!pad) {
-        if (note.ticks >= startTick) unmapped.set(note.midi, (unmapped.get(note.midi) ?? 0) + 1);
-        continue;
-      }
+      const builtIn = MIDI_NOTE_TO_PAD.get(note.midi);
+      if (!builtIn && note.ticks >= startTick) noPadCounts.set(note.midi, (noPadCounts.get(note.midi) ?? 0) + 1);
+      const chosen = builtIn ? undefined : options.noteMap?.get(note.midi);
+      const pad = builtIn ?? (chosen === 'ignore' ? undefined : chosen);
+      if (!pad) continue;
       hits.push({ pad, velocity: Math.round(note.velocity * 127), time: (note.ticks - startTick) * msPerTick });
     }
   }
 
   const grid: RecordGrid = { startTime: 0, bpm: info.bpm, bars, beatsPerBar: info.beatsPerBar, subdivision, landing };
   const notes = quantizeHits(hits, grid);
-  const list = [...unmapped].sort((a, b) => a[0] - b[0]).map(([note, count]) => ({ note, count }));
+  const noPad = [...noPadCounts]
+    .sort((a, b) => a[0] - b[0])
+    .map(([note, count]): NoPadNote => ({ note, count, mappedTo: options.noteMap?.get(note) ?? null }));
+  const list = noPad.filter((u) => u.mappedTo === null).map(({ note, count }) => ({ note, count }));
   if (list.length > 0) {
-    warnings.push(`Left out ${list.reduce((s, u) => s + u.count, 0)} notes with no pad: ${list.map((u) => `note ${u.note} (${u.count}×)`).join(', ')}.`);
+    const left = list.reduce((s, u) => s + u.count, 0);
+    warnings.push(`Left out ${left} note${left === 1 ? '' : 's'} with no pad: ${list.map((u) => `${describeMidiNote(u.note)} ${u.count}×`).join(', ')}. Pick a pad for them below.`);
   }
   if (notes.length === 0) warnings.push('No drum notes in the chosen bars.');
   const range = fromBar === 1 && toBar === info.bars ? '' : ` (bars ${fromBar}–${toBar})`;
@@ -167,6 +189,7 @@ export function midiToDraft(midi: Midi, options: MidiImportOptions = {}): MidiIm
       warnings,
     },
     unmapped: list,
+    noPad,
     noteCount: notes.length,
   };
 }

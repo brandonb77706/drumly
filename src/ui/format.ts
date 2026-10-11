@@ -42,3 +42,12 @@ export function formatPctShort(v: number | null): string {
 export function passChipClass(verdict: 'clean' | 'almost' | 'rough', isBest: boolean): string {
   return `pass-chip ${verdict}${isBest ? ' best' : ''}`;
 }
+
+/** Time played: "45 s" under a minute, "12 min", "1 h 05 min". */
+export function formatDuration(ms: number): string {
+  const totalMin = Math.floor(ms / 60_000);
+  if (totalMin === 0) return ms <= 0 ? '0 min' : `${Math.max(1, Math.round(ms / 1000))} s`;
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return h > 0 ? `${h} h ${String(m).padStart(2, '0')} min` : `${m} min`;
+}

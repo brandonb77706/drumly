@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatMeanOffset, formatOffset, formatPctShort, formatSpread, formatTimingPhrase, passChipClass } from './format';
+import { formatMeanOffset, formatOffset, formatPctShort, formatSpread, formatTimingPhrase, passChipClass, formatDuration } from './format';
 import { passVerdict } from '../trainer/ladder';
 
 describe('formatOffset', () => {
@@ -64,5 +64,15 @@ describe('passChipClass', () => {
     ]);
     expect(passChipClass(passVerdict(80, t), false)).toBe('pass-chip almost');
     expect(passChipClass(passVerdict(50, t), true)).toBe('pass-chip rough best');
+  });
+});
+
+describe('formatDuration', () => {
+  it('seconds under a minute, then minutes, then hours', () => {
+    expect(formatDuration(0)).toBe('0 min');
+    expect(formatDuration(400)).toBe('1 s');
+    expect(formatDuration(45_000)).toBe('45 s');
+    expect(formatDuration(12 * 60_000 + 59_000)).toBe('12 min');
+    expect(formatDuration(65 * 60_000)).toBe('1 h 05 min');
   });
 });

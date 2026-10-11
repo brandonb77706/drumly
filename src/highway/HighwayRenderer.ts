@@ -1,5 +1,5 @@
 import type { Pad } from '../input';
-import { computeLayout, fitLayout, laneCenterY, noteToX, type HighwayLayout } from './layout';
+import { computeLayout, laneCenterY, noteToX, scrollFitLayout, type HighwayLayout } from './layout';
 import type { HighwayModel, NoteState } from './model';
 
 /** Feedback colors, matching the grade colors used elsewhere on the page. */
@@ -34,6 +34,7 @@ const COLORS = {
   listenLabel: '#7fb4ff',
   playLabel: '#ff8a3d',
   banner: 'rgba(17, 20, 26, 0.85)',
+  ruler: '#8b93a7',
 } as const;
 
 const LANE_HEIGHT_CSS = 34;
@@ -67,7 +68,15 @@ export class HighwayRenderer {
    * (a whole recording or import), and the time passed to draw() is ignored. Times are on the
    * model's own axis.
    */
-  fit: { from: number; to: number } | null = null;
+  fit: { from: number; to: number; minPxPerMs?: number } | null = null;
+  /** Bar numbers drawn in the header strip of a fitted picture (times on the model's axis). */
+  ruler: readonly { time: number; label: string }[] | null = null;
+  /**
+   * A dense fitted picture (see `fit.minPxPerMs`) scrolls with this element: an overflow-x box
+   * under the canvas holding one wide child. Its scrollLeft is read on every draw.
+   */
+  private scroller: { box: HTMLElement; spacer: HTMLElement } | null = null;
+  private spacerWidth = -1;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -96,6 +105,31 @@ export class HighwayRenderer {
     this.resize();
   }
 
+  /** Use `box` (overflow-x: auto, holding `spacer`) as the scroll bar for dense fitted pictures. */
+  attachScroller(box: HTMLElement, spacer: HTMLElement): void {
+    this.scroller = { box, spacer };
+    // A trackpad swipe or Shift+wheel over the canvas scrolls it too.
+    this.canvas.addEventListener('wheel', (event) => {
+      if (box.hidden) return;
+      const dx = event.deltaX !== 0 ? event.deltaX : event.shiftKey ? event.deltaY : 0;
+      if (dx === 0) return;
+      event.preventDefault();
+      box.scrollLeft += dx;
+    }, { passive: false });
+  }
+
+  /** Show the scroll bar only while the picture needs it, with the right scroll width. */
+  private updateScroller(contentWidth: number | null): void {
+    const sc = this.scroller;
+    if (!sc) return;
+    const width = contentWidth === null ? 0 : Math.ceil(contentWidth);
+    if (width === this.spacerWidth) return;
+    this.spacerWidth = width;
+    sc.box.hidden = width === 0;
+    sc.spacer.style.width = `${width}px`;
+    if (width === 0) sc.box.scrollLeft = 0;
+  }
+
   dispose(): void {
     this.observer?.disconnect();
   }
@@ -106,7 +140,9 @@ export class HighwayRenderer {
     else if (window.devicePixelRatio !== this.dpr) this.resize();
     const { ctx } = this;
     const fit = this.fit;
-    const layout = fit ? fitLayout(this.layout, fit.from, fit.to) : this.layout;
+    const scrollFit = fit ? scrollFitLayout(this.layout, fit.from, fit.to, fit.minPxPerMs ?? 0, this.scroller?.box.scrollLeft ?? 0) : null;
+    this.updateScroller(scrollFit?.scrolls ? scrollFit.contentWidth : null);
+    const layout = scrollFit ? scrollFit.layout : this.layout;
     const now = fit ? fit.from : time;
     const { width: w, height: h, labelWidth, laneHeight, lanesTop, otherTop, otherHeight } = layout;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
@@ -129,6 +165,8 @@ export class HighwayRenderer {
 
     const model = this.model;
     let visibleNotes = 0;
+    /** Header text already drawn (x ranges), so ruler numbers don't print over it. */
+    const headerTaken: [number, number][] = [];
     if (model) {
       ctx.save();
       ctx.beginPath();
@@ -153,6 +191,7 @@ export class HighwayRenderer {
           ctx.textBaseline = 'middle';
           ctx.fillStyle = COLORS.focusLabel;
           ctx.fillText(model.focusLabel, x1 - 4, lanesTop / 2 + 1);
+          headerTaken.push([x1 - 4 - ctx.measureText(model.focusLabel).width - 4, x1]);
         }
       }
 
@@ -231,6 +270,23 @@ export class HighwayRenderer {
         const half = tick.lane < 0 ? otherHeight * 0.42 : tickHalf;
         ctx.fillStyle = tick.state === 'extra' ? STATE_COLORS.extra : COLORS.tick;
         ctx.fillRect(x - 1, y - half, 2, half * 2);
+      }
+
+      // Bar numbers along the top of a fitted picture, skipping any too close to the last one.
+      if (fit && this.ruler) {
+        ctx.font = SMALL_FONT;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = COLORS.ruler;
+        let lastX = -Infinity;
+        for (const mark of this.ruler) {
+          const x = noteToX(mark.time, now, layout);
+          if (x < labelWidth - 1 || x > w - 4) continue;
+          const width = ctx.measureText(mark.label).width;
+          if (x < lastX + 6 || headerTaken.some(([a, b]) => x + 3 + width > a && x + 3 < b)) continue;
+          ctx.fillText(mark.label, x + 3, lanesTop / 2 + 1);
+          lastX = x + 3 + width;
+        }
       }
 
       if (!fit) {
