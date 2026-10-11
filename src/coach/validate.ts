@@ -36,7 +36,8 @@ export function isSessionReport(v: unknown): v is SessionReport {
   if (!isObj(v)) return false;
   const { lesson, bpm, accuracy, timing, perPad, problemSpots } = v;
   return (
-    isObj(lesson) && typeof lesson.title === 'string' && (lesson.category === 'beat' || lesson.category === 'fill') &&
+    isObj(lesson) && typeof lesson.title === 'string' && (lesson.category === 'beat' || lesson.category === 'fill' || lesson.category === 'song') &&
+    (lesson.mine === undefined || typeof lesson.mine === 'boolean') &&
     typeof v.passes === 'number' &&
     isObj(bpm) && typeof bpm.min === 'number' && typeof bpm.max === 'number' &&
     (v.trainer === null || (isObj(v.trainer) && typeof v.trainer.finalBpm === 'number' && typeof v.trainer.learned === 'boolean')) &&

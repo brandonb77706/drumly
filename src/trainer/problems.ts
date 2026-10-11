@@ -1,7 +1,7 @@
 import { DEFAULT_TIMING_THRESHOLDS, type NoteResult } from '../grading';
 import type { Pad } from '../input';
 import { clicksPerBeat } from '../metronome/timing';
-import { focusNoteIndices, noteIndex, positionLabel, type Lesson } from '../lessons';
+import { focusNoteIndices, fullBar, noteIndex, positionLabel, type Lesson } from '../lessons';
 
 /** How one note of the lesson has gone across a session's passes. */
 export interface NoteProblemStats {
@@ -132,7 +132,7 @@ export class ProblemTracker {
    */
   describe(spot: ProblemSpot, padLabel: (pad: Pad) => string): string {
     const s = spot.stats;
-    const where = positionLabel(s.bar, s.beat, s.subdivision, clicksPerBeat(this.lesson.subdivision));
+    const where = positionLabel(fullBar(this.lesson, s.bar), s.beat, s.subdivision, clicksPerBeat(this.lesson.subdivision));
     const parts: { count: number; text: string }[] = [];
     if (s.missed > 0) parts.push({ count: s.missed, text: `missed in ${s.missed} of ${s.passes} passes` });
     for (const [pad, n] of [...s.wrongPads].sort((a, b) => b[1] - a[1])) parts.push({ count: n, text: `hit as ${padLabel(pad)} ${times(n)}` });

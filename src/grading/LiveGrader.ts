@@ -4,7 +4,9 @@ import { summarize, type GradeSummary } from './summary';
 import {
   resolveConfig,
   type ExpectedNote,
+  type ExtraHit,
   type GradeResult,
+  type NoteResult,
   type GradingConfig,
   type HitVerdict,
 } from './types';
@@ -43,7 +45,16 @@ export interface LiveGraderOptions {
   autoCheck?: boolean;
   /** performance.now() source, for tests. */
   now?: () => number;
+  /**
+   * Notes more than this long before the miss deadline (now - window - grace) are settled: their
+   * results are frozen and they leave the live regrade, so each hit only regrades the notes near
+   * the current position, however long the song. Default 2000 ms. Infinity keeps everything live.
+   */
+  settleMs?: number;
 }
+
+/** Default for LiveGraderOptions.settleMs. */
+export const DEFAULT_SETTLE_MS = 2000;
 
 export interface FinalGrade {
   results: GradeResult;
@@ -51,9 +62,11 @@ export interface FinalGrade {
 }
 
 /**
- * Thin live wrapper around the batch grader. Every decision comes from grade(), re-run over
- * all notes and hits seen so far whenever something changes, so live and batch grading of
- * the same hits always agree. Verdicts are emitted immediately and revised if later hits
+ * Thin live wrapper around the batch grader. Every decision comes from grade(), re-run over the
+ * live notes and hits whenever something changes. Notes long past their window are settled
+ * (see `settleMs`), so the regrade covers only the notes near the current position; a hit can
+ * only match notes within its window, so this gives the same result as grading everything
+ * (stop() still runs the batch grader over everything, as the final word). Verdicts are emitted immediately and revised if later hits
  * change the matching. Misses are only reported once a note's window has fully passed,
  * checked on requestAnimationFrame (or by calling check() yourself), never with setTimeout.
  */
@@ -63,11 +76,20 @@ export class LiveGrader {
   private readonly missGraceMs: number;
   private readonly autoCheck: boolean;
   private readonly now: () => number;
+  private readonly settleMs: number;
 
+  /** Every note ever added (for dedupe and the final grade). */
   private readonly notesById = new Map<string, ExpectedNote>();
+  /** Live (unsettled) notes, in time order. */
   private notes: ExpectedNote[] = [];
   private fetchedUntil = -Infinity;
-  private readonly hits: Hit[] = [];
+  /** Live hits: not consumed by a settled note, and not a settled extra. */
+  private hits: Hit[] = [];
+  /** Every hit received (for the final grade). */
+  private readonly allHits: Hit[] = [];
+  /** Frozen results, all earlier than any live note. */
+  private readonly settledNotes: NoteResult[] = [];
+  private readonly settledExtras: ExtraHit[] = [];
   private current: GradeResult = { notes: [], extras: [] };
   private verdicts = new Map<Hit, HitVerdict>();
   private readonly reportedMissed = new Set<string>();
@@ -88,6 +110,7 @@ export class LiveGrader {
     this.missGraceMs = options.missGraceMs ?? 50;
     this.autoCheck = options.autoCheck ?? typeof requestAnimationFrame === 'function';
     this.now = options.now ?? (() => performance.now());
+    this.settleMs = options.settleMs ?? DEFAULT_SETTLE_MS;
     if (!isNoteFunction(expected)) this.addNotes(expected);
   }
 
@@ -124,8 +147,8 @@ export class LiveGrader {
 
     this.fetchNotesUntil(now);
     const results = grade(
-      this.notes.filter((n) => n.time <= now),
-      this.hits,
+      [...this.notesById.values()].filter((n) => n.time <= now),
+      this.allHits,
       this.config,
     );
     return { results, summary: summarize(results) };
@@ -138,9 +161,16 @@ export class LiveGrader {
     };
   }
 
-  /** Current provisional results (all known notes, including ones not due yet). */
+  /** Current provisional results (all known notes, including ones not due yet), settled ones included. */
   getResults(): GradeResult {
-    return this.current;
+    if (this.settledNotes.length === 0 && this.settledExtras.length === 0) return this.current;
+    const extras = [...this.settledExtras, ...this.current.extras].sort((a, b) => a.hit.time - b.hit.time);
+    return { notes: [...this.settledNotes, ...this.current.notes], extras };
+  }
+
+  /** How many notes are in the live regrade (for tests and diagnostics). */
+  get liveNoteCount(): number {
+    return this.notes.length;
   }
 
   /** Report notes whose window has passed as missed. Called every animation frame by default. */
@@ -148,6 +178,7 @@ export class LiveGrader {
     if (this.fetchNotesUntil(now + this.config.windowMs)) this.emitRevisions(this.regrade(), null);
 
     const deadline = now - this.config.windowMs - this.missGraceMs;
+    this.settle(deadline - this.settleMs);
     for (const r of this.current.notes) {
       if (r.note.time >= deadline) break; // notes are in time order
       if (r.status === 'missed' && !this.reportedMissed.has(r.note.id)) {
@@ -168,7 +199,9 @@ export class LiveGrader {
   private handleHit(hit: Hit): void {
     if (!this.running || hit.time < this.ignoreHitsBefore) return;
     this.fetchNotesUntil(hit.time + this.config.windowMs);
+    this.settle(this.now() - this.config.windowMs - this.missGraceMs - this.settleMs);
     this.hits.push(hit);
+    this.allHits.push(hit);
     const previous = this.regrade();
 
     const verdict = this.verdicts.get(hit);
@@ -184,6 +217,44 @@ export class LiveGrader {
     for (const r of this.current.notes) if (r.status !== 'missed') this.verdicts.set(r.hit, r);
     for (const e of this.current.extras) this.verdicts.set(e.hit, e);
     return previous;
+  }
+
+  /**
+   * Freeze the results of live notes before `cut`, with the hits they took, and the extras that
+   * are too early to match any note still live (before cut - window). Missed notes not reported
+   * yet are reported now.
+   */
+  private settle(cut: number): void {
+    const first = this.current.notes[0];
+    if (!first || first.note.time >= cut) return;
+    const consumed = new Set<Hit>();
+    let n = 0;
+    for (const r of this.current.notes) {
+      if (r.note.time >= cut) break;
+      this.settledNotes.push(r);
+      if (r.status === 'missed') {
+        if (!this.reportedMissed.has(r.note.id)) {
+          this.reportedMissed.add(r.note.id);
+          this.emit({ type: 'missed', note: r.note });
+        }
+      } else consumed.add(r.hit);
+      n++;
+    }
+    const extraCut = cut - this.config.windowMs;
+    for (const e of this.current.extras) {
+      if (e.hit.time < extraCut) {
+        this.settledExtras.push(e);
+        consumed.add(e.hit);
+      }
+    }
+    const settledIds = new Set(this.current.notes.slice(0, n).map((r) => r.note.id));
+    this.notes = this.notes.filter((note) => !settledIds.has(note.id));
+    this.hits = this.hits.filter((h) => !consumed.has(h));
+    for (const h of consumed) this.verdicts.delete(h);
+    this.current = {
+      notes: this.current.notes.slice(n),
+      extras: this.current.extras.filter((e) => !consumed.has(e.hit)),
+    };
   }
 
   private emitRevisions(previous: Map<Hit, HitVerdict>, except: Hit | null): void {
@@ -207,9 +278,10 @@ export class LiveGrader {
     for (const note of notes) {
       if (this.notesById.has(note.id)) continue;
       this.notesById.set(note.id, note);
+      this.notes.push(note);
       added = true;
     }
-    if (added) this.notes = [...this.notesById.values()].sort((a, b) => a.time - b.time);
+    if (added) this.notes.sort((a, b) => a.time - b.time);
     return added;
   }
 

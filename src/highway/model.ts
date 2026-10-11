@@ -90,6 +90,8 @@ export interface HighwayModelOptions {
   lanes?: readonly Pad[];
   /** Per-pass style. Default: no label, filled notes. Outlined passes get no focus shading (they aren't graded). */
   passStyle?: (pass: number) => PassStyle;
+  /** Label drawn on the focus range. Default "graded". */
+  focusLabel?: string;
 }
 
 const PLAIN: PassStyle = { label: null, outlined: false };
@@ -115,6 +117,8 @@ export class HighwayModel {
   readonly turnMarks: TurnMark[] = [];
   /** Becomes true once a hit lands on a pad with no lane; the "other" lane is shown from then on. */
   hasOtherLane = false;
+  /** Label drawn on the focus range. */
+  readonly focusLabel: string;
 
   private readonly passes: number;
   private readonly pastMs: number;
@@ -142,6 +146,7 @@ export class HighwayModel {
     this.pastMs = options.pastMs ?? 3000;
     this.futureMs = options.futureMs ?? 2600;
     this.refreshMs = options.refreshMs ?? 200;
+    this.focusLabel = options.focusLabel ?? 'graded';
   }
 
   laneOf(pad: Pad): number {

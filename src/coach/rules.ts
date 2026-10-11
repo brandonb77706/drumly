@@ -140,7 +140,7 @@ export function spotDrill(r: SessionReport, s: ProblemSpotReport): string {
   } else {
     part = `just bar ${s.bar}`;
   }
-  const then = r.fill ? 'try the full fill' : `play the whole ${r.lesson.category}`;
+  const then = r.fill ? 'try the full fill' : `play the whole ${r.lesson.category === 'song' ? 'section' : r.lesson.category}`;
   return `Loop ${part} at ${slowDownBpm(r)} BPM until ${s.pad} is clean 3 times in a row, then ${then}.`;
 }
 
@@ -162,7 +162,7 @@ function wentWell(r: SessionReport): string[] {
 function headline(r: SessionReport, fixCount: number): string {
   const acc = r.accuracy.overall ?? 0;
   if (r.trainer?.learned) {
-    const learned = `${r.lesson.category === 'fill' ? 'Fill' : 'Beat'} learned at ${r.trainer.finalBpm} BPM.`;
+    const learned = `${CATEGORY_WORDS[r.lesson.category]} learned at ${r.trainer.finalBpm} BPM.`;
     const spots = r.problemSpots.length;
     if (spots === 0) return `${learned} Nice work.`;
     return `${learned} ${spots === 1 ? 'One spot' : `${SPOT_WORDS[spots] ?? spots} spots`} to clean up.`;
@@ -172,9 +172,17 @@ function headline(r: SessionReport, fixCount: number): string {
   return fixCount === 1 ? 'Good work. One thing to tighten up.' : 'Good work. Two things to tighten up.';
 }
 
+const CATEGORY_WORDS: Record<SessionReport['lesson']['category'], string> = { beat: 'Beat', fill: 'Fill', song: 'Section' };
+
 function nextAfterLearning(r: SessionReport): string {
-  if (r.lesson.next) return `Move on to "${r.lesson.next}". Start it in the Trainer and let it bring you up to speed.`;
   const target = (r.trainer?.targetBpm ?? r.bpm.max) + 10;
+  // The player's own fills aren't in the difficulty order, so there is no "next" or "hardest".
+  if (r.lesson.mine) {
+    return r.lesson.category === 'song'
+      ? `Raise the Trainer's target to ${target} BPM, or loop the next section of the song.`
+      : `Raise the Trainer's target to ${target} BPM, or record another fill to learn.`;
+  }
+  if (r.lesson.next) return `Move on to "${r.lesson.next}". Start it in the Trainer and let it bring you up to speed.`;
   return `That's the hardest ${r.lesson.category} here. Run it in the Trainer again with the target at ${target} BPM.`;
 }
 

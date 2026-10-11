@@ -13,6 +13,11 @@ export interface RecordGrid {
   readonly bars: number;
   readonly beatsPerBar: number;
   readonly subdivision: RecordSubdivision;
+  /**
+   * Also keep one "landing" step: beat 1 of the bar after the last one (almost every fill ends
+   * on a crash plus kick there). Its notes come out in bar `bars`. Default false.
+   */
+  readonly landing?: boolean;
 }
 
 /** Hits at or above this velocity are written as accents ("X"). Shift on the keyboard gives 127. */
@@ -29,13 +34,13 @@ export function gridSteps(grid: Pick<RecordGrid, 'bars' | 'beatsPerBar' | 'subdi
 /**
  * Snap each hit to the nearest grid step. A hit exactly halfway between two steps goes to the
  * later one, so the result never depends on hit order. Hits closer to a step outside the
- * recorded bars are dropped. Several hits on the same pad and step become one note, an accent
+ * recorded bars (and the landing step, if kept) are dropped. Several hits on the same pad and step become one note, an accent
  * if any of them was hard. Notes come out in step order, pads in kit order within a step (the
  * order the text format reads them back in).
  */
 export function quantizeHits(hits: readonly Pick<Hit, 'pad' | 'velocity' | 'time'>[], grid: RecordGrid): LessonNote[] {
   const stepMs = gridStepMs(grid);
-  const total = gridSteps(grid);
+  const total = gridSteps(grid) + (grid.landing ? 1 : 0);
   const perBeat = clicksPerBeat(grid.subdivision);
   const loudest = new Map<string, { pad: Pad; step: number; velocity: number }>();
   for (const hit of hits) {

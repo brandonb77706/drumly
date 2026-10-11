@@ -129,3 +129,16 @@ export function visibleTimeRange(now: number, layout: HighwayLayout): { from: nu
     to: now + (layout.width - layout.nowX) / layout.pxPerMs,
   };
 }
+
+/** Space left and right of a fitted picture, CSS px. */
+export const FIT_MARGIN = 12;
+
+/**
+ * A layout showing the time span [from, to] across the whole note area, standing still: draw it
+ * with now = from. The now line sits at the left margin (the renderer hides it in this mode).
+ */
+export function fitLayout(layout: HighwayLayout, from: number, to: number): HighwayLayout {
+  const span = Math.max(1, to - from);
+  const nowX = layout.labelWidth + FIT_MARGIN;
+  return { ...layout, nowX, pxPerMs: Math.max(0, layout.width - nowX - FIT_MARGIN) / span };
+}

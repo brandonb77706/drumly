@@ -1,7 +1,7 @@
 import { DEFAULT_GRADING_CONFIG, summarize, type GradeResult, type GradeStats, type NoteResult } from '../grading';
 import type { Pad } from '../input';
 import { PAD_LABELS } from '../input/padLabels';
-import { ALL_LESSONS, countSyllable, focusNoteIndices, focusResult, noteIndex, positionLabel, type Lesson } from '../lessons';
+import { ALL_LESSONS, countSyllable, focusNoteIndices, focusResult, fullBar, noteIndex, positionLabel, type Lesson } from '../lessons';
 import { clicksPerBeat } from '../metronome/timing';
 import { ProblemTracker } from '../trainer/problems';
 import type { PadReport, PartReport, PracticeSession, ProblemSpotReport, SessionReport, Tendency, TimingReport, Trend } from './types';
@@ -33,7 +33,7 @@ export function buildSessionReport(session: PracticeSession): SessionReport {
   for (const p of passes) problems.recordPass(p.result.notes);
 
   return {
-    lesson: { title: lesson.title, category: lesson.category, next: nextLesson(lesson)?.title ?? null },
+    lesson: { title: lesson.title, category: lesson.category, next: nextLesson(lesson)?.title ?? null, mine: !ALL_LESSONS.some((l) => l.id === lesson.id) },
     passes: passes.length,
     bpm: bpms.length > 0 ? { min: bpm(Math.min(...bpms)), max: bpm(Math.max(...bpms)) } : { min: 0, max: 0 },
     trainer: session.trainer
@@ -64,8 +64,8 @@ export function buildSessionReport(session: PracticeSession): SessionReport {
       const instead = [...s.wrongPads].sort((a, b) => b[1] - a[1])[0];
       return {
         pad: PAD_LABELS[s.pad],
-        where: positionLabel(s.bar, s.beat, s.subdivision, clicksPerBeat(lesson.subdivision)),
-        bar: s.bar + 1,
+        where: positionLabel(fullBar(lesson, s.bar), s.beat, s.subdivision, clicksPerBeat(lesson.subdivision)),
+        bar: fullBar(lesson, s.bar) + 1,
         beat: s.beat + 1,
         passes: s.passes,
         offPasses: s.offPasses,
@@ -133,7 +133,7 @@ function fillInfo(lesson: Lesson): { count: string; beats: string; bar: number; 
   const inFocus = [...focusNoteIndices(lesson)].map((i) => lesson.notes[i]!);
   // Prefer a drum over the hi-hat or kick that may still be keeping time.
   const first = inFocus.find((n) => !n.pad.startsWith('hihat') && n.pad !== 'kick') ?? inFocus[0];
-  return { count, beats, bar: focus.start.bar + 1, firstPad: first ? PAD_LABELS[first.pad] : '' };
+  return { count, beats, bar: fullBar(lesson, focus.start.bar) + 1, firstPad: first ? PAD_LABELS[first.pad] : '' };
 }
 
 /** Notes outside the focus range (extras are left out: they belong to no part). */

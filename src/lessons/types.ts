@@ -14,7 +14,7 @@ export interface LessonNote {
   readonly accent?: boolean;
 }
 
-export type LessonCategory = 'beat' | 'fill';
+export type LessonCategory = 'beat' | 'fill' | 'song';
 
 /** A position in a lesson, 0-based like LessonNote. */
 export interface LessonPosition {
@@ -50,6 +50,12 @@ export interface Lesson {
   readonly focus?: LessonFocus;
   /** The text the lesson was written in, if any (shown to the player). */
   readonly source?: string;
+  /**
+   * Set when this is a section cut out of a longer lesson (Listen mode, a song's A-B loop): its
+   * bar 0 is bar `firstBar` (0-based) of the full lesson, which has `totalBars` bars. Labels use
+   * the full lesson's numbers, so the same note always has the same name.
+   */
+  readonly section?: { readonly firstBar: number; readonly totalBars: number };
 }
 
 /**

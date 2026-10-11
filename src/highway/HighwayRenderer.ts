@@ -1,5 +1,5 @@
 import type { Pad } from '../input';
-import { computeLayout, laneCenterY, noteToX, type HighwayLayout } from './layout';
+import { computeLayout, fitLayout, laneCenterY, noteToX, type HighwayLayout } from './layout';
 import type { HighwayModel, NoteState } from './model';
 
 /** Feedback colors, matching the grade colors used elsewhere on the page. */
@@ -62,6 +62,12 @@ export class HighwayRenderer {
   message = '';
   /** Shown large in the top-right corner while set, e.g. "Listen" or "Your turn". */
   banner: { text: string; tone: 'listen' | 'play' } | null = null;
+  /**
+   * While set, the picture stands still and shows exactly this time span across the note area
+   * (a whole recording or import), and the time passed to draw() is ignored. Times are on the
+   * model's own axis.
+   */
+  fit: { from: number; to: number } | null = null;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -95,10 +101,13 @@ export class HighwayRenderer {
   }
 
   /** Draw the highway as of `now` (ms, performance.now() clock). */
-  draw(now: number): void {
+  draw(time: number): void {
     if ((this.model?.hasOtherLane ?? false) !== this.showOther) this.applyHeight();
     else if (window.devicePixelRatio !== this.dpr) this.resize();
-    const { ctx, layout } = this;
+    const { ctx } = this;
+    const fit = this.fit;
+    const layout = fit ? fitLayout(this.layout, fit.from, fit.to) : this.layout;
+    const now = fit ? fit.from : time;
     const { width: w, height: h, labelWidth, laneHeight, lanesTop, otherTop, otherHeight } = layout;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
 
@@ -143,7 +152,7 @@ export class HighwayRenderer {
           ctx.textAlign = 'right';
           ctx.textBaseline = 'middle';
           ctx.fillStyle = COLORS.focusLabel;
-          ctx.fillText('graded', x1 - 4, lanesTop / 2 + 1);
+          ctx.fillText(model.focusLabel, x1 - 4, lanesTop / 2 + 1);
         }
       }
 
@@ -177,9 +186,10 @@ export class HighwayRenderer {
         }
       }
 
-      // Notes.
-      const radius = laneHeight * 0.26;
-      const accentRadius = laneHeight * 0.36;
+      // Notes. A fitted picture can be dense (a whole song), so notes shrink to fit their spacing.
+      const cap = fit ? Math.max(1.5, layout.pxPerMs * 45) : Infinity;
+      const radius = Math.min(laneHeight * 0.26, cap);
+      const accentRadius = Math.min(laneHeight * 0.36, cap * 1.3);
       for (const note of model.notes) {
         const x = noteToX(note.time, now, layout);
         if (x < labelWidth - accentRadius || x > w + accentRadius) continue;
@@ -223,8 +233,10 @@ export class HighwayRenderer {
         ctx.fillRect(x - 1, y - half, 2, half * 2);
       }
 
-      ctx.fillStyle = COLORS.now;
-      ctx.fillRect(layout.nowX - 1.5, 0, 3, h);
+      if (!fit) {
+        ctx.fillStyle = COLORS.now;
+        ctx.fillRect(layout.nowX - 1.5, 0, 3, h);
+      }
       ctx.restore();
     } else {
       ctx.fillStyle = COLORS.now;

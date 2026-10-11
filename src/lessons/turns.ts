@@ -5,22 +5,41 @@ import type { Lesson, LessonNote } from './types';
 /**
  * The section of a lesson that "Listen, then play" repeats: the whole bars that hold the focus
  * range (e.g. bars 2 and 3 of a fill lesson: the lead-in, the fill and its landing), or the whole
- * lesson if there is no focus. Bars are renumbered from 0; the focus moves with them. Whole bars
- * keep every turn on the metronome's bar grid, so turns are back-to-back sections of one timeline.
+ * lesson if there is no focus. Bars are renumbered from 0; the focus moves with them, and
+ * `section` remembers where they came from, so labels keep the full lesson's bar numbers. Whole
+ * bars keep every turn on the metronome's bar grid, so turns are back-to-back sections of one timeline.
  */
 export function sectionLesson(lesson: Lesson): Lesson {
   const focus = lesson.focus;
   if (!focus) return lesson;
-  const first = focus.start.bar;
-  const last = focus.end.bar;
+  return barsLesson(lesson, focus.start.bar, focus.end.bar);
+}
+
+/**
+ * Bars `first` to `last` (0-based, inclusive) of a lesson as a lesson of their own, e.g. a song's
+ * A-B loop. Bars are renumbered from 0 and `section` records the original numbering (it stacks:
+ * a section of a section still points at the full lesson). The focus is kept if it lies inside
+ * the bars, otherwise dropped (the whole section is graded). The whole lesson comes back unchanged.
+ */
+export function barsLesson(lesson: Lesson, first: number, last: number): Lesson {
+  if (!Number.isInteger(first) || !Number.isInteger(last) || first < 0 || last >= lesson.bars || first > last) {
+    throw new RangeError(`Bars ${first + 1} to ${last + 1} are outside "${lesson.title}" (${lesson.bars} bars).`);
+  }
   if (first === 0 && last === lesson.bars - 1) return lesson;
   const shift = <T extends { bar: number }>(p: T): T => ({ ...p, bar: p.bar - first });
   const notes: LessonNote[] = lesson.notes.filter((n) => n.bar >= first && n.bar <= last).map(shift);
+  const focus = lesson.focus;
+  const keepFocus = focus !== undefined && focus.start.bar >= first && focus.end.bar <= last;
+  const { focus: _dropped, ...rest } = lesson;
   return {
-    ...lesson,
+    ...rest,
     bars: last - first + 1,
     notes,
-    focus: { start: shift(focus.start), end: shift(focus.end) },
+    ...(keepFocus ? { focus: { start: shift(focus.start), end: shift(focus.end) } } : {}),
+    section: {
+      firstBar: (lesson.section?.firstBar ?? 0) + first,
+      totalBars: lesson.section?.totalBars ?? lesson.bars,
+    },
   };
 }
 

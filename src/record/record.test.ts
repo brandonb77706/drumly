@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Hit } from '../input';
 import { parseLessonText, type LessonNote } from '../lessons';
-import { CustomLessonStore, customLesson, isCustomLesson, type CustomLessonData, type StorageLike } from './customLessons';
+import { CustomLessonStore, customLesson, isCustomLesson, landingFocus, type CustomLessonData, type StorageLike } from './customLessons';
 import { gridStepMs, notesToText, quantizeHits, type RecordGrid } from './quantize';
 
 const hit = (pad: Hit['pad'], time: number, velocity = 90) => ({ pad, time, velocity });
@@ -47,6 +47,45 @@ describe('quantizeHits', () => {
   it('drops hits nearer a step outside the recorded bars', () => {
     const late = 1000 + 16 * 250 - 100; // nearer the next bar's downbeat
     expect(quantizeHits([hit('crash', late), hit('kick', 1000 - 130)], sixteenths)).toEqual([]);
+  });
+});
+
+describe('the landing step', () => {
+  const withLanding: RecordGrid = { ...sixteenths, landing: true };
+  // A 1-bar 16th fill at 60 BPM (start 1000 ms, 250 ms steps) landing on crash plus kick at bar 1 beat 1.
+  const fill = [
+    hit('snare', 1000 + 8 * 250 + 6), hit('snare', 1000 + 9 * 250 - 12), hit('tom1', 1000 + 10 * 250 + 15), hit('tom1', 1000 + 11 * 250),
+    hit('tom2', 1000 + 12 * 250 - 8), hit('tom2', 1000 + 13 * 250 + 4), hit('tom3', 1000 + 14 * 250 + 20), hit('tom3', 1000 + 15 * 250 - 5),
+    hit('crash', 5000 + 18, 127), hit('kick', 5000 + 9),
+  ];
+
+  it('keeps the crash and kick on the next downbeat, as bar 1 beat 0 of the extra bar', () => {
+    const notes = quantizeHits(fill, withLanding);
+    expect(notes).toHaveLength(10);
+    expect(notes.slice(-2)).toEqual([
+      { pad: 'crash', bar: 1, beat: 0, subdivision: 0, accent: true },
+      { pad: 'kick', bar: 1, beat: 0, subdivision: 0 },
+    ]);
+    // Without the landing step (the old behavior) they were dropped.
+    expect(quantizeHits(fill, sixteenths)).toHaveLength(8);
+  });
+
+  it('drops a hit more than half a step after the landing', () => {
+    expect(quantizeHits([hit('crash', 5000 + 126)], withLanding)).toEqual([]);
+    // ...and one just inside half a step still lands.
+    expect(quantizeHits([hit('crash', 5000 + 124)], withLanding)).toEqual([{ pad: 'crash', bar: 1, beat: 0, subdivision: 0 }]);
+    // Steps after the landing are never kept, even when hit dead on.
+    expect(quantizeHits([hit('snare', 5000 + 250)], withLanding)).toEqual([]);
+  });
+
+  it('saves as bars + 1, with the focus ending on the landing', () => {
+    const notes = quantizeHits(fill, withLanding);
+    const text = notesToText(notes, { ...withLanding, bars: 2 });
+    expect(text.split('\n')[0]).toBe('CR: ---------------- | X---------------');
+    const lesson = customLesson({ id: 'my-l', title: 'Landing', bpm: 60, bars: 2, beatsPerBar: 4, subdivision: 'sixteenth', text, focus: landingFocus(2) });
+    expect(lesson.bars).toBe(2);
+    expect(lesson.notes).toEqual(notes);
+    expect(lesson.focus).toEqual({ start: { bar: 0, beat: 0, subdivision: 0 }, end: { bar: 1, beat: 0, subdivision: 0 } });
   });
 });
 
@@ -114,6 +153,18 @@ describe('CustomLessonStore', () => {
     expect(reloaded.remove('my-a')).toEqual({ removed: true, persisted: true });
     expect(reloaded.remove('my-a').removed).toBe(false);
     expect(new CustomLessonStore(() => storage).list().map((l) => l.id)).toEqual(['my-b']);
+  });
+
+  it('stores kind, focus and origin; old entries without them still load as whole-bar fills', () => {
+    const storage = memoryStorage();
+    const store = new CustomLessonStore(() => storage);
+    store.save({ ...sample('my-f'), bars: 2, text: 'SN: x-x-x-x-xxxxxxxx | ----------------\nCR: ---------------- | x---------------', focus: landingFocus(2) });
+    store.save({ ...sample('my-s', 'Song'), kind: 'song', origin: 'midi', bars: 5, text: 'KK: ' + Array(5).fill('x---x---x---x---').join(' | ') });
+    const [fill, song] = new CustomLessonStore(() => storage).list();
+    expect(fill!.focus!.end).toEqual({ bar: 1, beat: 0, subdivision: 0 });
+    expect(song).toMatchObject({ category: 'song', bars: 5 });
+    expect(song!.focus).toBeUndefined();
+    expect(song!.description).toBe('Your imported song, at 70 BPM. Pick bars to loop below.');
   });
 
   it('a bad text is rejected before anything is stored', () => {

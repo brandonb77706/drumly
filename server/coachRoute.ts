@@ -19,13 +19,14 @@ export async function handleCoach(req: IncomingMessage, res: ServerResponse, con
   send(res, 200, await coachReport(report, config));
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
+/** The request body as text; rejects once it passes `maxBytes`. */
+export function readBody(req: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<string> {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => {
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
+      if (size > maxBytes) {
         reject(new Error('too large'));
         req.destroy();
       } else chunks.push(chunk);
@@ -35,7 +36,7 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-function send(res: ServerResponse, status: number, data: unknown): void {
+export function send(res: ServerResponse, status: number, data: unknown): void {
   res.statusCode = status;
   res.setHeader('Content-Type', 'application/json');
   res.end(JSON.stringify(data));

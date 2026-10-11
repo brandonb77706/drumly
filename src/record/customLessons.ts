@@ -1,16 +1,47 @@
-import { lessonFromText, type Lesson } from '../lessons';
+import { lessonFromText, type Lesson, type LessonFocus } from '../lessons';
 import { clicksPerBeat } from '../metronome/timing';
 import type { RecordSubdivision } from './quantize';
 
-/** What gets stored for a recorded fill. The notes live in `text`, the same format the player edits. */
+/** Where a custom lesson came from (for its description). */
+export type CustomOrigin = 'recorded' | 'image' | 'midi';
+
+/** What gets stored for a recorded or imported lesson. The notes live in `text`, the same format the player edits. */
 export interface CustomLessonData {
   readonly id: string;
   readonly title: string;
   readonly bpm: number;
+  /** Every bar of the text, the landing bar included. */
   readonly bars: number;
   readonly beatsPerBar: number;
   readonly subdivision: RecordSubdivision;
   readonly text: string;
+  /** Default 'fill'. Imports longer than MAX_FILL_BARS are songs. */
+  readonly kind?: 'fill' | 'song';
+  /** Default: every bar. A recorded fill's focus ends on its landing. */
+  readonly focus?: LessonFocus;
+  /** Default 'recorded'. */
+  readonly origin?: CustomOrigin;
+}
+
+/** Imports longer than this many bars (not counting a landing bar) are saved as songs. */
+export const MAX_FILL_BARS = 4;
+
+/** Fill or song for an import of `bars` bars (not counting a landing bar). */
+export function kindForBars(bars: number): 'fill' | 'song' {
+  return bars > MAX_FILL_BARS ? 'song' : 'fill';
+}
+
+/** Focus from the first step to the landing: beat 1 of the last bar (the bar holding only the landing). */
+export function landingFocus(bars: number): LessonFocus {
+  return { start: { bar: 0, beat: 0, subdivision: 0 }, end: { bar: bars - 1, beat: 0, subdivision: 0 } };
+}
+
+/** Focus over every step of every bar. */
+export function wholeFocus(bars: number, beatsPerBar: number, subdivision: RecordSubdivision): LessonFocus {
+  return {
+    start: { bar: 0, beat: 0, subdivision: 0 },
+    end: { bar: bars - 1, beat: beatsPerBar - 1, subdivision: clicksPerBeat(subdivision) - 1 },
+  };
 }
 
 export const CUSTOM_ID_PREFIX = 'my-';
@@ -21,25 +52,32 @@ export function isCustomLesson(lesson: Pick<Lesson, 'id'>): boolean {
 }
 
 /**
- * A custom fill as a lesson: category "fill", with the focus range covering every recorded bar.
+ * A custom lesson: category "fill" or "song". A fill's focus is the stored one (a recorded fill's
+ * ends on its landing), or every bar for entries saved before focus was stored. A song has no
+ * focus: everything is graded, and section looping picks the bars.
  * Throws LessonParseError if the text doesn't fit the grid.
  */
 export function customLesson(data: CustomLessonData): Lesson {
-  const perBeat = clicksPerBeat(data.subdivision);
+  const kind = data.kind ?? 'fill';
+  const grid = data.subdivision === 'triplet' ? 'triplets' : '16ths';
+  const bars = `${data.bars} bar${data.bars === 1 ? '' : 's'}`;
+  const description =
+    kind === 'song'
+      ? `Your imported song, at ${data.bpm} BPM. Pick bars to loop below.`
+      : data.origin === 'image' || data.origin === 'midi'
+        ? `Your imported fill (from ${data.origin === 'image' ? 'an image' : 'a MIDI file'}): ${bars} of ${grid} at ${data.bpm} BPM.`
+        : `Your recorded fill: ${bars} of ${grid}, recorded at ${data.bpm} BPM.`;
   return lessonFromText({
     id: data.id,
     title: data.title,
-    category: 'fill',
-    description: `Your recorded fill: ${data.bars} bar${data.bars === 1 ? '' : 's'} of ${data.subdivision === 'triplet' ? 'triplets' : '16ths'}, recorded at ${data.bpm} BPM.`,
+    category: kind,
+    description,
     defaultBpm: data.bpm,
     beatsPerBar: data.beatsPerBar,
     subdivision: data.subdivision,
     bars: data.bars,
     text: data.text,
-    focus: {
-      start: { bar: 0, beat: 0, subdivision: 0 },
-      end: { bar: data.bars - 1, beat: data.beatsPerBar - 1, subdivision: perBeat - 1 },
-    },
+    ...(kind === 'fill' ? { focus: data.focus ?? wholeFocus(data.bars, data.beatsPerBar, data.subdivision) } : {}),
   });
 }
 
@@ -139,6 +177,20 @@ function isCustomLessonData(v: unknown): v is CustomLessonData {
     typeof d.bars === 'number' && Number.isInteger(d.bars) && d.bars >= 1 &&
     typeof d.beatsPerBar === 'number' && Number.isInteger(d.beatsPerBar) &&
     (d.subdivision === 'sixteenth' || d.subdivision === 'triplet') &&
-    typeof d.text === 'string'
+    typeof d.text === 'string' &&
+    (d.kind === undefined || d.kind === 'fill' || d.kind === 'song') &&
+    (d.origin === undefined || d.origin === 'recorded' || d.origin === 'image' || d.origin === 'midi') &&
+    (d.focus === undefined || isFocus(d.focus))
   );
+}
+
+function isFocus(v: unknown): boolean {
+  if (typeof v !== 'object' || v === null) return false;
+  const f = v as Record<string, unknown>;
+  const isPos = (p: unknown) => {
+    if (typeof p !== 'object' || p === null) return false;
+    const o = p as Record<string, unknown>;
+    return [o.bar, o.beat, o.subdivision].every((n) => typeof n === 'number' && Number.isInteger(n));
+  };
+  return isPos(f.start) && isPos(f.end);
 }

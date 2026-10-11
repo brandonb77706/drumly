@@ -8,7 +8,7 @@ import type { ProblemSpotReport, SessionReport } from './types';
 /** A clean, unremarkable fill session to tweak per test. */
 function base(): SessionReport {
   return {
-    lesson: { title: 'Around the toms', category: 'fill', next: 'Full-bar tom run' },
+    lesson: { title: 'Around the toms', category: 'fill', next: 'Full-bar tom run', mine: false },
     passes: 4,
     bpm: { min: 60, max: 60 },
     trainer: null,
@@ -164,6 +164,26 @@ describe('ruleBasedCoaching', () => {
     r.lesson.next = null;
     r.trainer = { startBpm: 40, targetBpm: 65, finalBpm: 65, learned: true };
     expect(ruleBasedCoaching(r).nextExercise).toBe("That's the hardest fill here. Run it in the Trainer again with the target at 75 BPM.");
+  });
+
+  it('a fill of your own, learned: raise the target or record another, never "the hardest fill here"', () => {
+    const r = base();
+    r.lesson = { title: 'My fill 1', category: 'fill', next: null, mine: true };
+    r.trainer = { startBpm: 40, targetBpm: 65, finalBpm: 65, learned: true };
+    const next = ruleBasedCoaching(r).nextExercise;
+    expect(next).toBe("Raise the Trainer's target to 75 BPM, or record another fill to learn.");
+    expect(next).not.toContain('hardest');
+  });
+
+  it('a song section learned says "Section learned" and suggests the next section', () => {
+    const r = base();
+    r.lesson = { title: 'My song', category: 'song', next: null, mine: true };
+    r.graded = 'whole lesson';
+    r.fill = null;
+    r.trainer = { startBpm: 60, targetBpm: 90, finalBpm: 90, learned: true };
+    const c = ruleBasedCoaching(r);
+    expect(c.headline).toBe('Section learned at 90 BPM. Nice work.');
+    expect(c.nextExercise).toBe("Raise the Trainer's target to 100 BPM, or loop the next section of the song.");
   });
 
   it('at most 2 fixes, most important first', () => {

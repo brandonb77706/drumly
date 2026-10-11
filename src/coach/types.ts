@@ -80,6 +80,8 @@ export interface SessionReport {
     category: LessonCategory;
     /** The next lesson of the same kind in difficulty order, if any. */
     next: string | null;
+    /** The player's own fill or song (recorded or imported), not a built-in lesson. */
+    mine: boolean;
   };
   passes: number;
   bpm: { min: number; max: number };

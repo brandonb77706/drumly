@@ -14,7 +14,7 @@ import {
 import { rockBeat } from './patterns';
 import { LiveGrader, DEFAULT_GRADING_CONFIG, summarize, type ExpectedNote, type GradeResult, type GradeSummary, type HitVerdict } from './grading';
 import { GRADE_BARS, GRADE_BPM, GRADE_SCENARIOS, checkSummary, rockBeatNotes, type GradeScenario } from './gradeScenarios';
-import { Metronome, MAX_BPM, MIN_BPM, SUBDIVISIONS, isClickMode, type ClickMode, type MetronomeClick, type Subdivision } from './metronome';
+import { Metronome, MAX_BPM, MIN_BPM, SUBDIVISIONS, clicksPerBeat, isClickMode, type ClickMode, type MetronomeClick, type Subdivision } from './metronome';
 import {
   ALL_LESSONS,
   SPEED_OPTIONS,
@@ -24,6 +24,8 @@ import {
   gradedNotesOnly,
   sectionLesson,
   turnPlan,
+  barsLesson,
+  barOfLabel,
   type TurnPlan,
   formatLessonText,
   lessonBpmAt,
@@ -35,11 +37,16 @@ import {
   type Lesson,
   type LessonCategory,
 } from './lessons';
-import { HighwayModel, HighwayRenderer, KIT_ORDER, type PassStyle } from './highway';
+import { HighwayModel, HighwayRenderer, KIT_ORDER, lessonOverview, type PassStyle } from './highway';
 import { DrumKit, LessonSounds, isHitSoundMode, shouldPlayHitSound, type HitSoundMode } from './sound';
 import { CORRECT_PAN, YOURS_PAN, compareSchedule, compareTimelines, moveResult, replayClicks, type CompareMode, type PassTake } from './compare/compare';
 import { gridStepMs, notesToText, quantizeHits, type RecordGrid, type RecordSubdivision } from './record/quantize';
-import { CustomLessonStore, customLesson, isCustomLesson, type CustomLessonData } from './record/customLessons';
+import { CustomLessonStore, isCustomLesson, MAX_FILL_BARS } from './record/customLessons';
+import { draftToLesson, type ImportDraft } from './import/draft';
+import { midiInfo, midiToDraft, readMidiFile, type MidiFileInfo } from './import/midi';
+import { notationDraft, notationFailureMessage } from './import/notation';
+import { isNotationMediaType, notationImportAvailable, prepareImage, requestNotationImport } from './import/client';
+import type { Midi } from '@tonejs/midi';
 import { TrainerSession, defaultLadderSettings, passBpm, passVerdict, type LadderSettings, type PassVerdict, type TrainerPassReport } from './trainer';
 import { PAD_LABELS, buildSummary, fmtPct, node } from './ui/summary';
 import {
@@ -479,9 +486,11 @@ function frame(now: number): void {
     barLabelEl.textContent = currentBeat.isCountIn
       ? 'Count-in'
       : activeLesson
-        ? `${passLabel(activeLesson, Math.floor(currentBeat.bar / activeLesson.lesson.bars))}Bar ${(currentBeat.bar % activeLesson.lesson.bars) + 1} of ${activeLesson.lesson.bars}`
+        ? barLabel(passLabel(activeLesson, Math.floor(currentBeat.bar / activeLesson.lesson.bars)), barOfLabel(activeLesson.lesson, currentBeat.bar % activeLesson.lesson.bars))
         : recordRun
-          ? `Recording · Bar ${currentBeat.bar + 1} of ${recordRun.grid.bars}`
+          ? currentBeat.bar < recordRun.grid.bars
+            ? `Recording · bar ${currentBeat.bar + 1} of ${recordRun.grid.bars}`
+            : 'Recording · the landing'
           : `Bar ${currentBeat.bar + 1}`;
     showTurn(currentBeat.isCountIn ? null : currentBeat.bar);
   } else if (beatsEl.children.length === 0) {
@@ -849,9 +858,18 @@ const IDLE_MESSAGE = 'Press Preview to see and hear it once, or Start to play.';
 /** What the highway shows. `frozenAt` holds the picture still after a run ends. */
 let highwayView: { model: HighwayModel; frozenAt: number | null } | null = null;
 
-function showHighway(model: HighwayModel, frozenAt: number | null): void {
+/** `fit`: show this time span standing still and whole (a recording, an import, a song overview). */
+function showHighway(model: HighwayModel, frozenAt: number | null, fit: { from: number; to: number } | null = null): void {
   highwayView = { model, frozenAt };
   highway.setModel(model);
+  highway.fit = fit;
+}
+
+/** The whole lesson, standing still and fitted to the canvas width. */
+function showOverview(lesson: Lesson, bpm: number, focusLabel?: string): void {
+  const view = lessonOverview(lesson, bpm, focusLabel ? { focusLabel } : {});
+  showHighway(view.model, view.from, { from: view.from, to: view.to });
+  highway.message = '';
 }
 
 function freezeHighway(): void {
@@ -878,7 +896,7 @@ function highwayFrame(now: number): void {
         if (note.id === preview.lastNoteId) preview.endAt = note.time + PREVIEW_TAIL_MS;
       });
       if (preview.endAt !== null && now >= preview.endAt) {
-        stopLesson(isCustomLesson(preview.lesson) && !customLessons.includes(preview.lesson) ? 'Playback done. Save it to practice it.' : 'Preview done. Press Start to play it.');
+        stopLesson(isCustomLesson(preview.lesson) && !customLessons.some((l) => l.id === preview.lesson.id) ? 'Playback done. Save it to practice it.' : 'Preview done. Press Start to play it.');
       }
     } else if (lessonRun?.plan.listen) {
       // The app's turn: flash the pads as its drums play, like a preview.
@@ -897,9 +915,9 @@ function highwayFrame(now: number): void {
 
 // ---- Lesson controls -----------------------------------------------------------
 
-const CATEGORY_LABELS: Record<LessonCategory, string> = { beat: 'Beats', fill: 'Fills' };
+const CATEGORY_LABELS: Record<LessonCategory, string> = { beat: 'Beats', fill: 'Fills', song: 'Songs' };
 
-/** Recorded fills, saved in localStorage (in memory only if storage is blocked). */
+/** Recorded and imported fills and songs, saved in localStorage (in memory only if storage is blocked). */
 const customStore = new CustomLessonStore(() => window.localStorage);
 let customLessons: Lesson[] = customStore.list();
 
@@ -926,7 +944,8 @@ function renderLessonPicker(): void {
     return g;
   };
   const groups = (Object.keys(CATEGORY_LABELS) as LessonCategory[]).map((category) => group(CATEGORY_LABELS[category], ALL_LESSONS.filter((l) => l.category === category)));
-  groups.push(group('My fills', customLessons));
+  groups.push(group('My fills', customLessons.filter((l) => l.category !== 'song')));
+  groups.push(group('My songs', customLessons.filter((l) => l.category === 'song')));
   lessonSelect.replaceChildren(...groups.filter((g) => g.children.length > 0));
   lessonSelect.value = allLessons().some((l) => l.id === current) ? current : ALL_LESSONS[0]!.id;
 }
@@ -935,7 +954,7 @@ function renderLessonPicker(): void {
 let deleteArmed = false;
 function resetDeleteButton(): void {
   deleteArmed = false;
-  lessonDeleteButton.textContent = 'Delete fill';
+  lessonDeleteButton.textContent = selectedLesson().category === 'song' ? 'Delete song' : 'Delete fill';
   lessonDeleteButton.hidden = !isCustomLesson(selectedLesson());
 }
 lessonDeleteButton.addEventListener('click', () => {
@@ -1032,6 +1051,8 @@ function showLesson(lesson: Lesson): void {
   problemSpotsEl.hidden = true;
   hideCoach();
   showHighway(new HighwayModel(lesson), null);
+  // Songs: the loop controls, and the whole song standing still with the loop range marked.
+  showSongLoop(lesson);
   resetDeleteButton();
   lastSession = null;
   renderCompareBar();
@@ -1055,7 +1076,8 @@ function updateLessonControls(): void {
   recordButton.textContent = recording ? 'Stop recording' : 'Record';
   recordButton.classList.toggle('playing', recording);
   recordButton.disabled = active && !recording;
-  for (const control of [recordPlayButton, recordSaveButton, recordBarsSelect, recordBpmInput, recordGridSelect]) control.disabled = active;
+  for (const control of [reviewPlayButton, reviewSaveButton, reviewDiscardButton, recordBarsSelect, recordBpmInput, recordGridSelect, midiPickButton, midiReviewButton, loopFromInput, loopToInput, loopWholeButton]) control.disabled = active;
+  imagePickButton.disabled = active || imageImporting || !imageImportReady;
   compareModeSelect.disabled = active;
   comparePlayButton.disabled = active && compareRun === null;
   // In the trainer the ladder owns the tempo.
@@ -1176,9 +1198,11 @@ function barStartTime(bar: number, around: number, spanMs: number): number | nul
 function startLesson(lesson: Lesson, loop: boolean, mode: 'play' | 'preview' | 'trainer', bpmOverride?: number): void {
   if (metronome.isRunning) stopMetronome(); // also stops grade tests and test patterns
   stopCompare();
-  // "Listen, then play": the app plays the fill's bars, then the player does, alternating until Stop.
+  // A song plays its A-B loop. "Listen, then play": the app plays the fill's bars, then the player
+  // does, alternating until Stop. Both keep the full lesson's bar numbers for every label.
   const listen = mode !== 'preview' && lessonListenInput.checked;
-  const played = listen ? sectionLesson(lesson) : lesson;
+  const looped = loopedLesson(lesson);
+  const played = listen ? sectionLesson(looped) : looped;
   const plan = turnPlan(played.bars, listen);
   loop ||= listen;
   const trainer = mode === 'trainer' ? new TrainerSession(played, trainerSettings(lesson)) : null;
@@ -1303,6 +1327,11 @@ function capitalize(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+/** "Your turn · bar 2 of 3", or "Bar 2 of 3" with no prefix. Bars use the full lesson's numbers. */
+function barLabel(prefix: string, bar: string): string {
+  return prefix ? `${prefix}${bar}` : capitalize(bar);
+}
+
 /** "Listen · ", "Your turn · ", "Pass 3 · " or nothing, for the bar label. */
 function passLabel(active: { loop: boolean; plan?: TurnPlan | undefined }, pass: number): string {
   if (active.plan?.listen) return active.plan.turn(pass) === 'listen' ? 'Listen · ' : 'Your turn · ';
@@ -1415,7 +1444,7 @@ function lessonFrame(now: number): void {
     lessonRun = null; // already graded; stopLesson must not stop the grader again
     stopLesson('Done. Press Start to play it again.', run);
   } else if (run.trainer?.done) {
-    stopLesson(`Fill learned at ${formatBpm(run.trainer.bpm)} BPM!`);
+    stopLesson(`${lesson.category === 'song' ? 'Section' : lesson.category === 'beat' ? 'Beat' : 'Fill'} learned at ${formatBpm(run.trainer.bpm)} BPM!`);
   }
 }
 
@@ -1595,19 +1624,11 @@ const recordBpmInput = el<HTMLInputElement>('record-bpm');
 const recordGridSelect = el<HTMLSelectElement>('record-grid');
 const recordButton = el<HTMLButtonElement>('record-start');
 const recordStatusEl = el('record-status');
-const recordResultEl = el('record-result');
-const recordTextInput = el<HTMLTextAreaElement>('record-text');
-const recordErrorEl = el('record-error');
-const recordTitleInput = el<HTMLInputElement>('record-title');
-const recordPlayButton = el<HTMLButtonElement>('record-play');
-const recordSaveButton = el<HTMLButtonElement>('record-save');
 
 /** Lanes while recording: the whole kit, so any hit has a lane. */
 const RECORD_LANES = KIT_ORDER.filter((p) => p !== 'crash2' && p !== 'snareRim' && p !== 'crossStick' && p !== 'rideBell');
 let recordStarting = false;
 let recordGeneration = 0;
-/** What was recorded: the grid it was played on, edited as text. */
-let recordDraft: { bpm: number; bars: number; subdivision: RecordSubdivision } | null = null;
 
 function recordSettings(): { bpm: number; bars: number; subdivision: RecordSubdivision } {
   const bpm = Math.round(Math.min(MAX_BPM, Math.max(MIN_BPM, Number(recordBpmInput.value) || 70)));
@@ -1624,10 +1645,11 @@ function startRecording(): void {
   if (metronome.isRunning) stopMetronome();
   const { bpm, bars, subdivision } = recordSettings();
   applyMetronomeSettings({ bpm, beatsPerBar: 4, subdivision, countIn: true });
-  const display: Lesson = { id: 'recording', title: 'Recording', category: 'fill', description: '', defaultBpm: bpm, beatsPerBar: 4, bars, subdivision, notes: [] };
+  // One extra bar on screen: the landing on its downbeat.
+  const display: Lesson = { id: 'recording', title: 'Recording', category: 'fill', description: '', defaultBpm: bpm, beatsPerBar: 4, bars: bars + 1, subdivision, notes: [] };
   const model = new HighwayModel(display, { lanes: RECORD_LANES });
   showHighway(model, null);
-  recordResultEl.hidden = true;
+  closeReview();
   recordStatusEl.textContent = 'Starting…';
   recordStatusEl.classList.add('running');
   recordStarting = true;
@@ -1642,16 +1664,17 @@ function startRecording(): void {
     if (generation !== recordGeneration) return;
     const downbeat = bar0Downbeat();
     const barMs = (4 * 60_000) / bpm;
+    // The landing: beat 1 of the bar after the last recorded one.
     const end = downbeat === null ? null : barStartTime(bars, downbeat, bars * barMs + 2000);
     if (!metronome.isRunning || downbeat === null || end === null) {
       cancelRecording('Could not start in time. Press Record again.');
       return;
     }
-    // Hits are captured from the start; the quantizer keeps only those inside the recorded bars.
+    // Hits are captured from the start; the quantizer keeps only those inside the recorded bars and the landing.
     manager.startRecording();
     recordStarting = false;
-    recordRun = { grid: { startTime: downbeat, bpm, bars, beatsPerBar: 4, subdivision }, end, model };
-    recordStatusEl.textContent = `Count-in… then play your fill. Recording ${bars} bar${bars === 1 ? '' : 's'} at ${bpm} BPM.`;
+    recordRun = { grid: { startTime: downbeat, bpm, bars, beatsPerBar: 4, subdivision, landing: true }, end, model };
+    recordStatusEl.textContent = `Count-in… then play your fill. Recording ${bars} bar${bars === 1 ? '' : 's'} at ${bpm} BPM, then the landing on the next downbeat.`;
     updateLessonControls();
   })();
 }
@@ -1669,7 +1692,7 @@ function cancelRecording(message: string): void {
   updateLessonControls();
 }
 
-/** Called every animation frame: once the last bar (and half a step) has passed, quantize what was played. */
+/** Called every animation frame: once the landing (and half a step) has passed, quantize what was played. */
 function recordFrame(now: number): void {
   const run = recordRun;
   if (!run || now < run.end + gridStepMs(run.grid) / 2 + 30) return;
@@ -1684,42 +1707,18 @@ function recordFrame(now: number): void {
     recordStatusEl.textContent = 'No hits were recorded. Press Record to try again.';
     return;
   }
-  recordDraft = { bpm: run.grid.bpm, bars: run.grid.bars, subdivision: run.grid.subdivision };
-  recordTextInput.value = notesToText(notes, run.grid);
-  recordTitleInput.value = '';
-  recordResultEl.hidden = false;
-  recordStatusEl.textContent = `Recorded ${notes.length} note${notes.length === 1 ? '' : 's'}, snapped to the nearest ${run.grid.subdivision === 'triplet' ? 'triplet' : '16th'}. Fix the text if needed, then save it.`;
-  previewDraft();
-}
-
-/** The draft as a lesson, or null (with the reason shown) if the text doesn't parse. */
-function draftLesson(id = 'my-draft'): { lesson: Lesson; data: CustomLessonData } | null {
-  if (!recordDraft) return null;
-  const data: CustomLessonData = { id, title: recordTitleInput.value.trim() || defaultFillTitle(), beatsPerBar: 4, text: recordTextInput.value, ...recordDraft };
-  try {
-    const lesson = customLesson(data);
-    recordErrorEl.textContent = lesson.notes.length === 0 ? 'The text has no notes.' : '';
-    return lesson.notes.length === 0 ? null : { lesson, data };
-  } catch (error) {
-    recordErrorEl.textContent = error instanceof LessonParseError ? error.message : errorMessage(error);
-    return null;
-  }
-}
-
-function defaultFillTitle(): string {
-  return `My fill ${customLessons.length + 1}`;
-}
-
-/** Show the draft on the highway, standing still with bar 1 just past the now line. */
-function previewDraft(): void {
-  const draft = draftLesson();
-  if (!draft) return;
-  const t = performance.now();
-  const model = new HighwayModel(draft.lesson, { pastMs: 1e9, futureMs: 1e9 });
-  const clicks = replayClicks(draft.lesson, draft.lesson.defaultBpm, [t + 200]);
-  model.refresh(t, () => clicks, true);
-  showHighway(model, t);
-  highway.message = '';
+  recordStatusEl.textContent = `Recorded ${notes.length} note${notes.length === 1 ? '' : 's'}, snapped to the nearest ${run.grid.subdivision === 'triplet' ? 'triplet' : '16th'}. Check it below, then save it.`;
+  openReview({
+    origin: 'recorded',
+    title: `My fill ${customLessons.filter((l) => l.category === 'fill').length + 1}`,
+    bpm: run.grid.bpm,
+    beatsPerBar: run.grid.beatsPerBar,
+    subdivision: run.grid.subdivision,
+    // The recorded bars plus the landing bar.
+    text: notesToText(notes, { ...run.grid, bars: run.grid.bars + 1 }),
+    landing: true,
+    warnings: [],
+  });
 }
 
 recordButton.addEventListener('click', () => {
@@ -1727,30 +1726,403 @@ recordButton.addEventListener('click', () => {
   if (recordRun || recordStarting) cancelRecording('Recording stopped.');
   else startRecording();
 });
-recordTextInput.addEventListener('input', () => previewDraft());
-recordPlayButton.addEventListener('click', () => {
-  recordPlayButton.blur();
-  const draft = draftLesson();
-  if (!draft || lessonRun || previewRun || lessonStarting) return;
-  startLesson(draft.lesson, false, 'preview', draft.lesson.defaultBpm);
+for (const control of [recordBarsSelect, recordBpmInput, recordGridSelect]) control.addEventListener('change', () => control.blur());
+
+// ---- Review (recordings and imports) ----------------------------------------------
+
+const reviewEl = el('review');
+const reviewHeadingEl = el('review-heading');
+const reviewKindEl = el('review-kind');
+const reviewChecksEl = el('review-checks');
+const reviewFigureEl = el('review-figure');
+const reviewImage = el<HTMLImageElement>('review-image');
+const reviewTextInput = el<HTMLTextAreaElement>('review-text');
+const reviewErrorEl = el('review-error');
+const reviewTitleInput = el<HTMLInputElement>('review-title');
+const reviewBpmInput = el<HTMLInputElement>('review-bpm');
+const reviewBeatsInput = el<HTMLInputElement>('review-beats');
+const reviewGridSelect = el<HTMLSelectElement>('review-grid');
+const reviewPlayButton = el<HTMLButtonElement>('review-play');
+const reviewSaveButton = el<HTMLButtonElement>('review-save');
+const reviewDiscardButton = el<HTMLButtonElement>('review-discard');
+
+const REVIEW_HEADINGS: Record<ImportDraft['origin'], string> = { recorded: 'Your recording', image: 'Imported from an image', midi: 'Imported from a MIDI file' };
+
+/** What's being reviewed: the import as it came in, and the image it came from (an object URL). */
+let review: { draft: ImportDraft; imageUrl: string | null } | null = null;
+
+/**
+ * Show an import for review: its text (editable), its settings, what to check, and a static
+ * highway of the whole thing. Nothing is saved until Save is pressed.
+ */
+function openReview(draft: ImportDraft, options: { imageUrl?: string; error?: string } = {}): void {
+  closeReview();
+  review = { draft, imageUrl: options.imageUrl ?? null };
+  reviewHeadingEl.textContent = REVIEW_HEADINGS[draft.origin];
+  reviewTextInput.value = draft.text;
+  reviewTitleInput.value = draft.title;
+  reviewBpmInput.value = String(draft.bpm);
+  reviewBeatsInput.value = String(draft.beatsPerBar);
+  reviewGridSelect.value = draft.subdivision;
+  // Recordings are always 4/4 on the grid they were played on.
+  reviewBeatsInput.disabled = draft.origin === 'recorded';
+  reviewGridSelect.disabled = draft.origin === 'recorded';
+
+  const checks: HTMLElement[] = [];
+  if (draft.confidence) {
+    checks.push(node('p', `confidence-${draft.confidence}`, `Claude's confidence: ${draft.confidence}.`));
+  }
+  if (draft.uncertain) checks.push(node('p', 'warn', `Check against the image: ${draft.uncertain}`));
+  else if (draft.origin === 'image') checks.push(node('p', '', 'Claude flagged nothing as uncertain, but compare it with the image before saving.'));
+  if (draft.warnings.length > 0) checks.push(node('ul', 'warn', undefined, draft.warnings.map((w) => node('li', '', w))));
+  reviewChecksEl.replaceChildren(...checks);
+
+  reviewFigureEl.hidden = !review.imageUrl;
+  if (review.imageUrl) reviewImage.src = review.imageUrl;
+  reviewEl.hidden = false;
+  previewReview();
+  if (options.error) reviewErrorEl.textContent = options.error;
+  updateLessonControls();
+}
+
+function closeReview(): void {
+  if (review?.imageUrl) URL.revokeObjectURL(review.imageUrl);
+  review = null;
+  reviewEl.hidden = true;
+  reviewImage.removeAttribute('src');
+  reviewErrorEl.textContent = '';
+}
+
+/** The draft with the review screen's edits. */
+function reviewedDraft(): ImportDraft | null {
+  if (!review) return null;
+  const bpm = Number(reviewBpmInput.value);
+  const beats = Number(reviewBeatsInput.value);
+  return {
+    ...review.draft,
+    title: reviewTitleInput.value,
+    bpm: Number.isFinite(bpm) ? bpm : review.draft.bpm,
+    beatsPerBar: Number.isFinite(beats) ? beats : review.draft.beatsPerBar,
+    subdivision: reviewGridSelect.value === 'triplet' ? 'triplet' : 'sixteenth',
+    text: reviewTextInput.value,
+  };
+}
+
+/** The reviewed draft as a lesson, or null with the parse error (and its line number) shown. */
+function reviewLesson(id = 'my-draft'): ReturnType<typeof draftToLesson> | null {
+  const draft = reviewedDraft();
+  if (!draft) return null;
+  try {
+    const result = draftToLesson(draft, id);
+    reviewErrorEl.textContent = '';
+    const { bars } = result.lesson;
+    const landing = result.data.focus && result.data.focus.end.bar === bars - 1 && result.data.focus.end.beat === 0 && draft.landing;
+    reviewKindEl.textContent =
+      result.data.kind === 'song'
+        ? `Saves under My songs: ${bars} bars (longer than ${MAX_FILL_BARS}), with section looping.`
+        : `Saves under My fills: ${landing ? `${bars - 1} bar${bars === 2 ? '' : 's'} plus the landing` : `${bars} bar${bars === 1 ? '' : 's'}`}.`;
+    return result;
+  } catch (error) {
+    reviewErrorEl.textContent = error instanceof LessonParseError ? error.message : errorMessage(error);
+    reviewKindEl.textContent = '';
+    return null;
+  }
+}
+
+/** The whole draft on the highway, standing still and fitted to the width. Keeps the last good picture on a parse error. */
+function previewReview(): void {
+  const result = reviewLesson();
+  if (!result || lessonRun || previewRun || lessonStarting || recordRun || compareRun) return;
+  showOverview(result.lesson, result.lesson.defaultBpm);
+}
+
+reviewTextInput.addEventListener('input', () => previewReview());
+for (const control of [reviewBpmInput, reviewBeatsInput, reviewGridSelect, reviewTitleInput]) {
+  control.addEventListener('change', () => {
+    control.blur();
+    previewReview();
+  });
+}
+reviewPlayButton.addEventListener('click', () => {
+  reviewPlayButton.blur();
+  const result = reviewLesson();
+  if (!result || lessonRun || previewRun || lessonStarting) return;
+  startLesson(result.lesson, false, 'preview', result.lesson.defaultBpm);
 });
-recordSaveButton.addEventListener('click', () => {
-  recordSaveButton.blur();
-  const draft = draftLesson(customStore.newId());
-  if (!draft) return;
-  const { lesson, persisted } = customStore.save(draft.data);
+reviewSaveButton.addEventListener('click', () => {
+  reviewSaveButton.blur();
+  const result = reviewLesson(customStore.newId());
+  if (!result) return;
+  const { lesson, persisted } = customStore.save(result.data);
   customLessons = customStore.list();
+  closeReview();
+  recordPanelEl.open = false;
+  importPanelEl.open = false;
   renderLessonPicker();
   lessonSelect.value = lesson.id;
   showLesson(lesson);
-  recordResultEl.hidden = true;
-  recordDraft = null;
-  recordPanelEl.open = false;
+  const where = lesson.category === 'song' ? 'My songs' : 'My fills';
   lessonStatusEl.textContent = persisted
-    ? `Saved "${lesson.title}" under My fills. Try it in the Trainer.`
+    ? `Saved "${lesson.title}" under ${where}. ${lesson.category === 'song' ? 'Pick bars to loop, then press Start.' : 'Try it in the Trainer.'}`
     : `Saved "${lesson.title}" for this session only: the browser blocked storage, so it will be gone after a reload.`;
 });
-for (const control of [recordBarsSelect, recordBpmInput, recordGridSelect]) control.addEventListener('change', () => control.blur());
+reviewDiscardButton.addEventListener('click', () => {
+  reviewDiscardButton.blur();
+  closeReview();
+  showLesson(selectedLesson());
+  lessonStatusEl.textContent = 'Discarded. Nothing was saved.';
+});
+
+// ---- Import: notation images and MIDI files ------------------------------------------
+
+const importPanelEl = el<HTMLDetailsElement>('import-panel');
+const imageDropEl = el('image-drop');
+const imagePickButton = el<HTMLButtonElement>('image-pick');
+const imageFileInput = el<HTMLInputElement>('image-file');
+const imageNoteEl = el('image-note');
+const imageStatusEl = el('image-status');
+const midiPickButton = el<HTMLButtonElement>('midi-pick');
+const midiFileInput = el<HTMLInputElement>('midi-file');
+const midiInfoEl = el('midi-info');
+const midiOptionsEl = el('midi-options');
+const midiTrackSelect = el<HTMLSelectElement>('midi-track');
+const midiFromInput = el<HTMLInputElement>('midi-from');
+const midiToInput = el<HTMLInputElement>('midi-to');
+const midiGridSelect = el<HTMLSelectElement>('midi-grid');
+const midiReviewButton = el<HTMLButtonElement>('midi-review');
+const midiStatusEl = el('midi-status');
+
+/** Whether the dev server has a key for image import; until known, assume not (no nagging either way). */
+let imageImportReady = false;
+let imageImporting = false;
+const NO_KEY_NOTE = 'Needs an Anthropic API key in .env.';
+imageNoteEl.textContent = NO_KEY_NOTE;
+imageDropEl.classList.add('off');
+void notationImportAvailable().then((available) => {
+  imageImportReady = available;
+  imageNoteEl.textContent = available ? '' : NO_KEY_NOTE;
+  imageDropEl.classList.toggle('off', !available);
+  updateLessonControls();
+});
+
+/** Send an image for transcription, then open the review with the image beside the text. */
+async function importImage(file: File): Promise<void> {
+  if (imageImporting) return;
+  if (!imageImportReady) {
+    imageStatusEl.textContent = notationFailureMessage('no-key');
+    return;
+  }
+  if (!isNotationMediaType(file.type)) {
+    imageStatusEl.textContent = 'Use a PNG, JPEG or WebP image.';
+    return;
+  }
+  imageImporting = true;
+  updateLessonControls();
+  imageStatusEl.classList.add('running');
+  imageStatusEl.textContent = 'Reading the notation with Claude… (up to 30 s)';
+  try {
+    const image = await prepareImage(file);
+    const res = await requestNotationImport({ mediaType: image.mediaType, data: image.data });
+    const imageUrl = URL.createObjectURL(file);
+    if (res.ok) {
+      imageStatusEl.textContent = res.retried ? 'Read it (Claude fixed its first try to fit the format). Check it below.' : 'Read it. Check it against the image below.';
+      openReview(notationDraft(res.reply), { imageUrl });
+    } else if (res.reply) {
+      // Still didn't parse after one correction: open it anyway so it can be fixed by hand.
+      imageStatusEl.textContent = notationFailureMessage(res.reason);
+      openReview(notationDraft(res.reply), { imageUrl, error: res.message });
+    } else {
+      URL.revokeObjectURL(imageUrl);
+      imageStatusEl.textContent = [notationFailureMessage(res.reason), res.message ? `API said: ${res.message}` : ''].filter(Boolean).join(' ');
+    }
+  } catch (error) {
+    imageStatusEl.textContent = errorMessage(error);
+  } finally {
+    imageImporting = false;
+    imageStatusEl.classList.remove('running');
+    updateLessonControls();
+  }
+}
+
+function firstImage(files: FileList | null | undefined): File | null {
+  return [...(files ?? [])].find((f) => f.type.startsWith('image/')) ?? null;
+}
+
+imagePickButton.addEventListener('click', () => {
+  imagePickButton.blur();
+  imageFileInput.click();
+});
+imageFileInput.addEventListener('change', () => {
+  const file = firstImage(imageFileInput.files);
+  imageFileInput.value = '';
+  if (file) void importImage(file);
+});
+imageDropEl.addEventListener('dragover', (event) => {
+  event.preventDefault();
+  imageDropEl.classList.add('over');
+});
+imageDropEl.addEventListener('dragleave', () => imageDropEl.classList.remove('over'));
+imageDropEl.addEventListener('drop', (event) => {
+  event.preventDefault();
+  imageDropEl.classList.remove('over');
+  const file = firstImage(event.dataTransfer?.files);
+  if (file) void importImage(file);
+});
+// Cmd+V pastes a screenshot, only while the import panel is open (so pasting elsewhere is untouched).
+document.addEventListener('paste', (event) => {
+  if (!importPanelEl.open) return;
+  const file = firstImage(event.clipboardData?.files);
+  if (!file) return;
+  event.preventDefault();
+  void importImage(file);
+});
+
+/** The MIDI file being imported, before review. */
+let midiFile: { midi: Midi; info: MidiFileInfo; fileName: string } | null = null;
+
+midiPickButton.addEventListener('click', () => {
+  midiPickButton.blur();
+  midiFileInput.click();
+});
+midiFileInput.addEventListener('change', () => {
+  const file = midiFileInput.files?.[0];
+  midiFileInput.value = '';
+  if (!file) return;
+  void file.arrayBuffer().then((bytes) => {
+    try {
+      const midi = readMidiFile(bytes);
+      const info = midiInfo(midi, file.name);
+      midiFile = { midi, info, fileName: file.name };
+      showMidiOptions(info);
+    } catch (error) {
+      midiFile = null;
+      midiOptionsEl.hidden = true;
+      midiInfoEl.textContent = '';
+      midiStatusEl.textContent = errorMessage(error);
+    }
+  });
+});
+
+/** Track and bar range choices for a MIDI file, so a fill can be pulled out of a whole song. */
+function showMidiOptions(info: MidiFileInfo): void {
+  midiStatusEl.textContent = '';
+  midiInfoEl.textContent = `"${info.name || 'Untitled'}": ${info.bars} bar${info.bars === 1 ? '' : 's'} of ${info.timeSignature.join('/')} at ${info.bpm} BPM.`;
+  const options: HTMLOptionElement[] = [];
+  if (info.drumTracks.length > 0) {
+    const drums = node('option', '', `Drums (channel 10, ${info.drumTracks.length} track${info.drumTracks.length === 1 ? '' : 's'})`);
+    drums.value = 'drums';
+    options.push(drums);
+  }
+  for (const t of info.tracks) {
+    if (t.noteCount === 0) continue;
+    const o = node('option', '', `${t.name} (channel ${t.channel + 1}, ${t.noteCount} notes)`);
+    o.value = String(t.index);
+    options.push(o);
+  }
+  midiTrackSelect.replaceChildren(...options);
+  if (info.drumTracks.length === 0) {
+    midiStatusEl.textContent = 'No notes on channel 10 (drums). Pick the track that holds the drums.';
+    const busiest = [...info.tracks].sort((a, b) => b.noteCount - a.noteCount)[0];
+    if (busiest) midiTrackSelect.value = String(busiest.index);
+  }
+  midiFromInput.max = midiToInput.max = String(info.bars);
+  midiFromInput.value = '1';
+  midiToInput.value = String(info.bars);
+  midiOptionsEl.hidden = false;
+}
+
+midiReviewButton.addEventListener('click', () => {
+  midiReviewButton.blur();
+  const file = midiFile;
+  if (!file) return;
+  const from = Math.round(Number(midiFromInput.value)) || 1;
+  const to = Math.round(Number(midiToInput.value)) || file.info.bars;
+  if (from > to) {
+    midiStatusEl.textContent = `Bar ${from} is after bar ${to}.`;
+    return;
+  }
+  const track = midiTrackSelect.value;
+  const { draft, noteCount } = midiToDraft(file.midi, {
+    fromBar: from,
+    toBar: to,
+    subdivision: midiGridSelect.value === 'triplet' ? 'triplet' : 'sixteenth',
+    fileName: file.fileName,
+    ...(track && track !== 'drums' ? { tracks: [Number(track)] } : {}),
+  });
+  if (noteCount === 0) {
+    midiStatusEl.textContent = `No drum notes in bars ${from}–${to}. Try other bars or another track.`;
+    return;
+  }
+  midiStatusEl.textContent = `${noteCount} notes from bars ${from}–${to}. Check them below.`;
+  openReview(draft);
+});
+for (const control of [midiTrackSelect, midiFromInput, midiToInput, midiGridSelect]) control.addEventListener('change', () => control.blur());
+
+// ---- Songs: section looping --------------------------------------------------------
+
+const songLoopEl = el('song-loop');
+const loopFromInput = el<HTMLInputElement>('loop-from');
+const loopToInput = el<HTMLInputElement>('loop-to');
+const loopWholeButton = el<HTMLButtonElement>('loop-whole');
+const loopInfoEl = el('loop-info');
+
+/** The A-B loop of the selected song, 0-based inclusive bars. */
+let songLoop: { id: string; first: number; last: number } | null = null;
+
+/** The bars to play: a song's A-B loop, or the whole lesson. */
+function loopedLesson(lesson: Lesson): Lesson {
+  if (lesson.category !== 'song' || songLoop?.id !== lesson.id) return lesson;
+  return barsLesson(lesson, songLoop.first, songLoop.last);
+}
+
+/** Song controls and the overview with the loop range shaded. */
+function showSongLoop(lesson: Lesson): void {
+  songLoopEl.hidden = lesson.category !== 'song';
+  if (lesson.category !== 'song') return;
+  if (songLoop?.id !== lesson.id) songLoop = { id: lesson.id, first: 0, last: Math.min(lesson.bars, 4) - 1 };
+  loopFromInput.max = loopToInput.max = String(lesson.bars);
+  loopFromInput.value = String(songLoop.first + 1);
+  loopToInput.value = String(songLoop.last + 1);
+  const whole = songLoop.first === 0 && songLoop.last === lesson.bars - 1;
+  loopInfoEl.textContent = whole ? `The whole song: ${lesson.bars} bars.` : `Looping bars ${songLoop.first + 1}–${songLoop.last + 1} of ${lesson.bars}.`;
+  // The overview marks the loop range like a focus range.
+  const display: Lesson = {
+    ...lesson,
+    focus: {
+      start: { bar: songLoop.first, beat: 0, subdivision: 0 },
+      end: { bar: songLoop.last, beat: lesson.beatsPerBar - 1, subdivision: clicksPerBeat(lesson.subdivision) - 1 },
+    },
+  };
+  if (!review) showOverview(display, lessonBpm(lesson), 'loop');
+}
+
+/** Apply the loop inputs. If the range is backwards, the end not being edited moves along (From 9 with To 4 gives 9-9). */
+function commitSongLoop(edited: 'from' | 'to'): void {
+  const lesson = selectedLesson();
+  if (lesson.category !== 'song') return;
+  const clamp = (v: number, fallback: number) => Math.min(lesson.bars, Math.max(1, Math.round(Number.isFinite(v) && v > 0 ? v : fallback)));
+  let first = clamp(Number(loopFromInput.value), 1);
+  let last = clamp(Number(loopToInput.value), lesson.bars);
+  if (first > last) {
+    if (edited === 'from') last = first;
+    else first = last;
+  }
+  songLoop = { id: lesson.id, first: first - 1, last: last - 1 };
+  showSongLoop(lesson);
+}
+
+for (const [input, edited] of [[loopFromInput, 'from'], [loopToInput, 'to']] as const) {
+  input.addEventListener('change', () => {
+    input.blur();
+    commitSongLoop(edited);
+  });
+}
+loopWholeButton.addEventListener('click', () => {
+  loopWholeButton.blur();
+  const lesson = selectedLesson();
+  songLoop = { id: lesson.id, first: 0, last: lesson.bars - 1 };
+  showSongLoop(lesson);
+});
 
 // ---- Coach ---------------------------------------------------------------------
 

@@ -84,7 +84,13 @@ describe('buildSessionReport', () => {
     const r = buildSessionReport(session);
     expect(r.trainer).toEqual({ startBpm: 60, targetBpm: 70, finalBpm: 70, learned: true });
     expect(r.bpm).toEqual({ min: 60, max: 70 });
-    expect(r.lesson).toEqual({ title: 'Around the toms', category: 'fill', next: 'Full-bar tom run' });
+    expect(r.lesson).toEqual({ title: 'Around the toms', category: 'fill', next: 'Full-bar tom run', mine: false });
+  });
+
+  it('a recorded fill is marked as the player\'s own, with no next lesson', () => {
+    const mine = { ...toms, id: 'my-abc', title: 'My fill 1' };
+    const r = buildSessionReport({ lesson: mine, passes: [scriptedPass(mine, 0, 60)] });
+    expect(r.lesson).toEqual({ title: 'My fill 1', category: 'fill', next: null, mine: true });
   });
 
   it('a beat without a fill grades the whole lesson', () => {

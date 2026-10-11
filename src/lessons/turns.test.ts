@@ -4,7 +4,11 @@ import { TrainerSession } from '../trainer';
 import { clicksPerBeat } from '../metronome/timing';
 import { FILL_LESSONS, STARTER_LESSONS } from './index';
 import { lessonToExpectedNotes, notePass } from './expected';
-import { drumGainForPass, gradedNotesOnly, GUIDE_GAIN, sectionLesson, turnPlan } from './turns';
+import { barsLesson, drumGainForPass, gradedNotesOnly, GUIDE_GAIN, sectionLesson, turnPlan } from './turns';
+import { barOfLabel, fullBar } from './position';
+import { ProblemTracker } from '../trainer/problems';
+import { buildSessionReport } from '../coach/report';
+import { scriptedPass } from '../coach/testSessions';
 import type { ClickTime, Lesson } from './types';
 
 const toms = FILL_LESSONS.find((l) => l.id === 'fill-around-toms')!;
@@ -32,6 +36,54 @@ describe('sectionLesson', () => {
 
   it('a lesson without a focus is played whole', () => {
     expect(sectionLesson(STARTER_LESSONS[0]!)).toBe(STARTER_LESSONS[0]);
+  });
+
+  it("remembers the full lesson's bar numbers: the fill is bar 2 of 3 in Listen mode too", () => {
+    const s = sectionLesson(toms);
+    expect(s.section).toEqual({ firstBar: 1, totalBars: 3 });
+    expect(barOfLabel(s, 0)).toBe('bar 2 of 3');
+    expect(barOfLabel(s, 1)).toBe('bar 3 of 3');
+    expect(barOfLabel(toms, 1)).toBe('bar 2 of 3');
+  });
+
+  it('problem spots and the coach name a section note by its full-lesson bar', () => {
+    const s = sectionLesson(toms);
+    const tom2 = s.notes.findIndex((n) => n.pad === 'tom2');
+    const tracker = new ProblemTracker(s);
+    // Tom 2 missed in every pass: "the 'and' of beat 4 (bar 2)", as the description and Trainer say.
+    const passes = [0, 1, 2].map((p) => scriptedPass(s, p, 60, (i) => (i === tom2 ? { status: 'missed' as const } : undefined)));
+    for (const p of passes) tracker.recordPass(p.result.notes);
+    expect(tracker.describe(tracker.worst(1)[0]!, (pad) => pad)).toContain('(bar 2)');
+    const report = buildSessionReport({ lesson: s, passes });
+    expect(report.problemSpots[0]).toMatchObject({ bar: 2, where: expect.stringContaining('(bar 2)') });
+    expect(report.fill?.bar).toBe(2);
+  });
+});
+
+describe('barsLesson (a song A-B loop)', () => {
+  const song: Lesson = { ...STARTER_LESSONS[0]!, id: 'my-song', bars: 8, notes: Array.from({ length: 8 }, (_, bar) => ({ pad: 'snare' as const, bar, beat: 1, subdivision: 0 })) };
+
+  it('cuts out bars, renumbers them from 0 and keeps the song numbering', () => {
+    const loop = barsLesson(song, 4, 6);
+    expect(loop.bars).toBe(3);
+    expect(loop.notes.map((n) => n.bar)).toEqual([0, 1, 2]);
+    expect(loop.section).toEqual({ firstBar: 4, totalBars: 8 });
+    expect(barOfLabel(loop, 0)).toBe('bar 5 of 8');
+    // A section of a section still counts in the song's bars.
+    const inner = barsLesson(loop, 1, 2);
+    expect(fullBar(inner, 0)).toBe(5);
+    expect(inner.section).toEqual({ firstBar: 5, totalBars: 8 });
+  });
+
+  it('the whole song comes back unchanged; bad ranges throw', () => {
+    expect(barsLesson(song, 0, 7)).toBe(song);
+    expect(() => barsLesson(song, 3, 2)).toThrow(RangeError);
+    expect(() => barsLesson(song, 0, 8)).toThrow(RangeError);
+  });
+
+  it('drops a focus that is not inside the bars', () => {
+    expect(barsLesson(toms, 0, 0).focus).toBeUndefined();
+    expect(barsLesson(toms, 1, 2).focus).toEqual(sectionLesson(toms).focus);
   });
 });
 

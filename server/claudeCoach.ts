@@ -22,6 +22,7 @@ How to read the report:
 - "graded" says whether accuracy covers just the fill or the whole lesson. "fill" and "groove" split the timing for lessons with a fill.
 - problemSpots are notes that went wrong in several passes, with drummer counting ("the 'e' of beat 4").
 - trainer.learned means the player reached the target tempo cleanly. lesson.next is the next lesson to suggest.
+- lesson.mine means the player recorded or imported this fill or song themselves, so it has no next lesson and is not "the hardest" of anything. After learning it, suggest raising the target BPM by 10, or recording another fill (for a song: looping the next section).
 
 Reply with:
 - headline: one short sentence. If trainer.learned is true but problemSpots is not empty, say it was learned and that there is a spot to clean up (for example "Fill learned at 65 BPM. One spot to clean up."), not just "nice work".
