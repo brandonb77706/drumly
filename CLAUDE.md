@@ -27,9 +27,10 @@ The kit is unavailable until about Oct 25, 2026. Until then, build and test with
 4. First lessons (3 or 4 simple beats) graded live - DONE
 5. Note highway display - DONE
 6. Fills as lessons with auto tempo increase - DONE
-7. Post-session analysis plus Claude API coaching (Jarvis voice optional)
-8. MIDI file import for songs with section looping
-9. Save sessions and chart progress over time
+7. Post-session analysis plus Claude API coaching (Jarvis voice optional) - DONE
+8. Drum sounds, listen-then-play mode, compare replay, and record-a-fill
+9. Import fills and songs: drum notation screenshots (Claude vision), MIDI files, section looping
+10. Save sessions and chart progress over time
 
 ## Working rules
 - Before coding a step, explain the design and the "why" briefly.

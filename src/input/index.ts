@@ -1,5 +1,6 @@
 export * from './types';
 export * from './padMaps';
+export { PAD_LABELS } from './padLabels';
 export { parseMidiMessage } from './parseMidiMessage';
 export { KeyboardSource, KEYBOARD_ACCENT_VELOCITY, KEYBOARD_NORMAL_VELOCITY } from './KeyboardSource';
 export type { KeyboardSourceOptions } from './KeyboardSource';

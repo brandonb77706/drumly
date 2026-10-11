@@ -40,7 +40,7 @@ describe('ProblemTracker', () => {
     const stats = t.stats();
     expect(stats).toHaveLength(10); // fill + landing only
     const s = stats.find((x) => x.index === tom2e)!;
-    expect(s).toMatchObject({ passes: 6, late: 4, early: 0, missed: 0, wrongPad: 0, offsetCount: 6 });
+    expect(s).toMatchObject({ passes: 6, late: 4, early: 0, missed: 0, wrongPad: 0, offPasses: 4, offsetCount: 6 });
     expect(s.offsetSum / s.offsetCount).toBeCloseTo(143 / 6, 9);
   });
 
@@ -58,22 +58,54 @@ describe('ProblemTracker', () => {
     const snare = fillIndex('snare', 0);
     const tom3 = fillIndex('tom3', 1);
     t.recordPass(pass(0, { [snare]: { offset: 0, pad: 'tom1' }, [tom3]: { status: 'missed' } }));
-    t.recordPass(pass(1, { [snare]: { offset: 5, pad: 'tom1' } }));
+    t.recordPass(pass(1, { [snare]: { offset: 5, pad: 'tom1' }, [tom3]: { status: 'missed' } }));
     t.recordPass(pass(2, { [snare]: { offset: -50, pad: 'tom2' } }));
     const [first, second] = t.worst();
     expect(t.describe(first!, label)).toBe("Snare on beat 3 (bar 2): hit as Tom 1 twice; hit as Tom 2 once; early in 1 of 3 passes");
-    expect(t.describe(second!, label)).toBe("Tom 3 on the 'a' of beat 4 (bar 2): missed in 1 of 3 passes");
+    expect(t.describe(second!, label)).toBe("Tom 3 on the 'a' of beat 4 (bar 2): missed in 2 of 3 passes");
+    // A wrong pad that is also early is one off pass, not two.
+    expect(first!.stats.offPasses).toBe(3);
   });
 
   it('ranks the worst 3: misses and wrong pads over timing, then larger offset, then lesson order', () => {
     const t = new ProblemTracker(toms);
     const [a, b, c, d, e] = [fillIndex('snare', 1), fillIndex('tom1', 0), fillIndex('tom1', 1), fillIndex('tom2', 0), fillIndex('tom3', 0)];
-    t.recordPass(pass(0, { [a]: { offset: 30 }, [b]: { offset: 25 }, [c]: { status: 'missed' }, [d]: { offset: 30 }, [e]: { offset: 30 } }));
-    t.recordPass(pass(1, { [a]: { offset: 30 }, [b]: { offset: 25 } }));
-    // Scores: c 1 (missed), a 1 (2 x late, mean 30), b 1 (2 x late, mean 25), d 0.5, e 0.5.
-    expect(t.worst().map((p) => p.stats.index)).toEqual([a, b, c]);
+    for (const p of [0, 1]) {
+      t.recordPass(pass(p, { [a]: { offset: 35 }, [b]: { offset: 25 }, [c]: { status: 'missed' }, [d]: { offset: 30 }, [e]: { offset: 30 } }));
+    }
+    t.recordPass(pass(2));
+    // Scores: c 2 (missed twice); a, b, d, e 1 each (late twice). Means: a 23.3, d 20, e 20, b 16.7.
+    expect(t.worst().map((p) => p.stats.index)).toEqual([c, a, d]);
     // d and e tie on score and mean offset: lesson order breaks it.
-    expect(t.worst(5).map((p) => p.stats.index)).toEqual([a, b, c, d, e]);
+    expect(t.worst(5).map((p) => p.stats.index)).toEqual([c, a, d, e, b]);
+  });
+
+  it('one slip is not a problem spot', () => {
+    const t = new ProblemTracker(toms);
+    const tom2e = fillIndex('tom2', 1);
+    // The screenshot case: 35 ms late once in 3 otherwise perfect passes.
+    t.recordPass(pass(0));
+    t.recordPass(pass(1));
+    t.recordPass(pass(2, { [tom2e]: { offset: 35 } }));
+    expect(t.worst()).toEqual([]);
+    // A single miss or wrong pad doesn't qualify either.
+    const u = new ProblemTracker(toms);
+    u.recordPass(pass(0, { [fillIndex('snare', 0)]: { status: 'missed' }, [fillIndex('tom1', 0)]: { offset: 0, pad: 'tom2' } }));
+    u.recordPass(pass(1));
+    expect(u.worst()).toEqual([]);
+  });
+
+  it('needs at least 2 off passes and at least a third of the passes graded', () => {
+    const tom2e = fillIndex('tom2', 1);
+    const run = (offIn: number[], total: number) => {
+      const t = new ProblemTracker(toms);
+      for (let p = 0; p < total; p++) t.recordPass(pass(p, offIn.includes(p) ? { [tom2e]: { offset: 35 } } : {}));
+      return t.worst().map((s) => s.stats.index);
+    };
+    expect(run([0, 1], 2)).toEqual([tom2e]); // 2 of 2
+    expect(run([0, 5], 6)).toEqual([tom2e]); // 2 of 6: exactly a third
+    expect(run([0, 6], 7)).toEqual([]); // 2 of 7: under a third
+    expect(run([0, 3, 6], 7)).toEqual([tom2e]); // 3 of 7
   });
 
   it('a clean session has no problem spots', () => {

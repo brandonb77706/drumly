@@ -182,6 +182,9 @@ details.lesson-text > summary { cursor: pointer; color: var(--muted); font-size:
 .lesson-history { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .pass-chip { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .pass-chip.best { border-color: var(--ok); color: var(--ok); }
+.pass-arrow { font-weight: 700; }
+.pass-arrow.up { color: var(--ok); }
+.pass-arrow.down { color: var(--warn); }
 .summary h3 { margin: 0; font-size: 16px; }
 .table-scroll { overflow-x: auto; }
 
@@ -210,3 +213,19 @@ details.debug[open] > summary { margin-bottom: 4px; }
 .problem-spots .none { color: var(--muted); list-style: none; margin-left: -22px; }
 details.full-stats > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 details.full-stats[open] > summary { margin-bottom: 10px; }
+
+/* Coach panel */
+.coach[hidden] { display: none; }
+.coach { margin-top: 14px; padding: 12px 14px; border: 1px solid #3d8bff66; border-radius: 8px; background: #121722; }
+.coach-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.coach-head h3 { margin: 0; font-size: 16px; color: #8fb8ff; }
+.coach-source { font-size: 12px; color: var(--muted); }
+.coach-head button { width: auto; margin: 0 0 0 auto; padding: 6px 10px; font-size: 13px; }
+.coach-headline { margin: 10px 0 6px; font-size: 16px; font-weight: 600; }
+.coach-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 4px 20px; }
+.coach-cols h4 { margin: 6px 0 2px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.coach-cols ul { margin: 0; padding-left: 20px; }
+.coach-cols li { margin: 3px 0; }
+.coach-cols li.none { color: var(--muted); list-style: none; margin-left: -20px; }
+.coach-next { margin: 10px 0 0; }
+#coach-note:empty { display: none; }

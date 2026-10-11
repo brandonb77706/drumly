@@ -32,7 +32,18 @@ import {
 import { HighwayModel, HighwayRenderer } from './highway';
 import { TrainerSession, defaultLadderSettings, passBpm, type LadderSettings, type TrainerPassReport } from './trainer';
 import { PAD_LABELS, buildSummary, fmtPct, node } from './ui/summary';
-import { formatOffset, formatTimingPhrase } from './ui/format';
+import {
+  browserSpeaker,
+  buildSessionReport,
+  coachingSpeech,
+  fallbackNote,
+  requestCoaching,
+  ruleBasedCoaching,
+  type CoachResponse,
+  type SessionPass,
+  type SessionReport,
+} from './coach';
+import { formatOffset, formatPctShort, formatTimingPhrase } from './ui/format';
 
 const LOG_SIZE = 30;
 
@@ -709,7 +720,21 @@ interface LessonRun {
   /** Next pass whose summary hasn't been shown yet. */
   nextPass: number;
   passWindows: Map<number, PassWindow>;
-  accuracies: number[];
+  /** One chip per reported pass. */
+  chips: PassChip[];
+  /** Every reported pass, for the coach. */
+  passes: SessionPass[];
+  /** performance.now() ms of bar 0's downbeat: the count-in text is cleared once it passes. */
+  downbeat: number;
+  countInShown: boolean;
+}
+
+interface PassChip {
+  accuracy: number;
+  /** Tempo the pass was played at. */
+  bpm: number;
+  /** Set when the pass made the trainer speed up or slow down. */
+  change: 'speedUp' | 'slowDown' | null;
 }
 
 /** Preview: the lesson plays once with the metronome, ungraded, flashing the pads on each note. */
@@ -722,6 +747,8 @@ interface PreviewRun {
 }
 
 let lessonRun: LessonRun | null = null;
+/** The Loop checkbox as the player last set it (the trainer overrides what it shows). */
+let loopChoice = lessonLoopInput.checked;
 let previewRun: PreviewRun | null = null;
 let cancelLesson: (() => void) | null = null;
 let lessonStarting = false;
@@ -872,6 +899,7 @@ function showLesson(lesson: Lesson): void {
   trainerTargetInput.value = String(ladder.targetBpm);
   trainerStatusEl.hidden = true;
   problemSpotsEl.hidden = true;
+  hideCoach();
   showHighway(new HighwayModel(lesson), null);
 }
 
@@ -882,7 +910,9 @@ function updateLessonControls(): void {
   lessonPreviewButton.disabled = active;
   lessonSelect.disabled = active;
   const trainer = lessonTrainerInput.checked;
-  lessonLoopInput.disabled = active || trainer; // the trainer always loops
+  // The trainer always loops: show Loop checked and locked, and restore the player's choice after.
+  lessonLoopInput.disabled = active || trainer;
+  lessonLoopInput.checked = trainer || loopChoice;
   lessonTrainerInput.disabled = active;
   // In the trainer the ladder owns the tempo.
   const trainerRunning = active && trainer;
@@ -927,7 +957,7 @@ function showProblemSpots(trainer: TrainerSession): void {
   problemListEl.replaceChildren(
     ...(spots.length > 0
       ? spots.map((spot) => node('li', '', trainer.problems.describe(spot, (pad) => PAD_LABELS[pad])))
-      : [node('li', 'none', trainer.reports.length > 0 ? 'No problem spots yet: every note in the fill has been on time and on the right pad.' : 'Play a pass first.')]),
+      : [node('li', 'none', trainer.reports.length > 0 ? 'No problem spots yet. Keep going.' : 'Play a pass first.')]),
   );
 }
 
@@ -956,7 +986,10 @@ lessonBpmInput.addEventListener('change', () => {
   lessonBpmInput.blur();
   commitLessonBpm();
 });
-lessonLoopInput.addEventListener('change', () => lessonLoopInput.blur());
+lessonLoopInput.addEventListener('change', () => {
+  lessonLoopInput.blur();
+  loopChoice = lessonLoopInput.checked;
+});
 lessonTrainerInput.addEventListener('change', () => {
   lessonTrainerInput.blur();
   updateLessonControls();
@@ -976,7 +1009,7 @@ lessonStartButton.addEventListener('click', () => {
   lessonStartButton.blur();
   if (lessonRun || previewRun || lessonStarting) stopLesson('Stopped.');
   else if (lessonTrainerInput.checked) startLesson(selectedLesson(), true, 'trainer');
-  else startLesson(selectedLesson(), lessonLoopInput.checked, 'play');
+  else startLesson(selectedLesson(), loopChoice, 'play');
 });
 lessonPreviewButton.addEventListener('click', () => {
   lessonPreviewButton.blur();
@@ -998,6 +1031,7 @@ function startLesson(lesson: Lesson, loop: boolean, mode: 'play' | 'preview' | '
   applyMetronomeSettings({ bpm, beatsPerBar: lesson.beatsPerBar, subdivision: lesson.subdivision, countIn: true });
   problemSpotsEl.hidden = true;
   trainerStatusEl.hidden = true;
+  hideCoach();
   if (trainer) showTrainerStatus(trainer, 'Count-in… then play. The groove is played but only the shaded fill is graded.', '');
   lessonStarting = true;
   updateLessonControls();
@@ -1067,14 +1101,14 @@ function startLesson(lesson: Lesson, loop: boolean, mode: 'play' | 'preview' | '
     grader.start();
 
     lessonStarting = false;
-    lessonRun = { lesson, loop, grader, trainer, nextPass: 0, passWindows: new Map(), accuracies: [] };
+    lessonRun = { lesson, loop, grader, trainer, nextPass: 0, passWindows: new Map(), chips: [], passes: [], downbeat, countInShown: true };
     lessonStatusEl.textContent = loop ? 'Count-in… then play. Looping until you press Stop.' : 'Count-in… then play.';
     updateLessonControls();
   })();
 }
 
 /** Stop the current lesson run or preview (if any) and the metronome. */
-function stopLesson(message: string): void {
+function stopLesson(message: string, finished: LessonRun | null = null): void {
   lessonGeneration++;
   const run = lessonRun;
   lessonRun = null;
@@ -1092,6 +1126,8 @@ function stopLesson(message: string): void {
   lessonStatusEl.textContent = message;
   lessonStatusEl.classList.remove('running');
   updateLessonControls();
+  const ended = run ?? finished;
+  if (ended) showCoach(ended);
 }
 
 /** Called every animation frame: report each pass once its last note's window has passed. */
@@ -1100,6 +1136,12 @@ function lessonFrame(now: number): void {
   if (!run) return;
   const { lesson } = run;
   const k = run.nextPass;
+
+  if (run.countInShown && now >= run.downbeat) {
+    run.countInShown = false;
+    lessonStatusEl.textContent = run.loop ? 'Looping until you press Stop.' : '';
+    if (run.trainer && run.trainer.reports.length === 0) trainerMessageEl.textContent = 'Only the shaded fill is graded.';
+  }
 
   const bpm = metronome.getSettings().bpm;
   let passWin = run.passWindows.get(k);
@@ -1134,12 +1176,14 @@ function lessonFrame(now: number): void {
     // Should never happen; make it visible rather than silently grading a partial pass.
     console.warn(`Pass ${k + 1} of "${lesson.id}" graded ${full.expected} notes, expected ${lesson.notes.length}.`);
   }
-  const report = run.trainer ? trainerPass(run, run.trainer, k, result, passBpm(lesson, passWin.start, passWin.end)) : null;
+  const playedBpm = passBpm(lesson, passWin.start, passWin.end);
+  const report = run.trainer ? trainerPass(run, run.trainer, k, result, playedBpm) : null;
+  run.passes.push({ bpm: playedBpm, result, ...(report ? { change: report.change } : {}) });
   const focus = report ? report.focus : summarize(focusResult(result, lesson, windowMs));
-  showPassSummary(run, k, focus, full, report);
+  showPassSummary(run, k, focus, full, report, playedBpm);
   if (!run.loop) {
     lessonRun = null; // already graded; stopLesson must not stop the grader again
-    stopLesson('Done. Press Start to play it again.');
+    stopLesson('Done. Press Start to play it again.', run);
   } else if (run.trainer?.done) {
     stopLesson(`Fill learned at ${formatBpm(run.trainer.bpm)} BPM!`);
   }
@@ -1166,9 +1210,10 @@ function trainerPass(run: LessonRun, trainer: TrainerSession, pass: number, resu
 /**
  * Headline: the focus range (the fill) if the lesson has one; whole-lesson stats stay available below.
  */
-function showPassSummary(run: LessonRun, pass: number, summary: GradeSummary, full: GradeSummary, report: TrainerPassReport | null): void {
+function showPassSummary(run: LessonRun, pass: number, summary: GradeSummary, full: GradeSummary, report: TrainerPassReport | null, playedBpm: number): void {
   const accuracy = summary.accuracy ?? 0;
-  run.accuracies.push(accuracy);
+  const change = report?.change === 'speedUp' || report?.change === 'slowDown' ? report.change : null;
+  run.chips.push({ accuracy, bpm: playedBpm, change });
   const previousBest = bestAccuracy.get(run.lesson.id);
   const isBest = previousBest === undefined || accuracy > previousBest;
   if (isBest) bestAccuracy.set(run.lesson.id, accuracy);
@@ -1187,11 +1232,98 @@ function showPassSummary(run: LessonRun, pass: number, summary: GradeSummary, fu
   }
   lessonSummaryEl.replaceChildren(node('div', 'summary', undefined, parts));
 
-  const topAccuracy = Math.max(...run.accuracies);
+  const topAccuracy = Math.max(...run.chips.map((c) => c.accuracy));
   lessonHistoryEl.replaceChildren(
-    ...run.accuracies.map((a, i) => node('span', a === topAccuracy ? 'pass-chip best' : 'pass-chip', `Pass ${i + 1}: ${fmtPct(a)}`)),
+    ...run.chips.map((c, i) => {
+      const chip = node('span', c.accuracy === topAccuracy ? 'pass-chip best' : 'pass-chip', `Pass ${i + 1} · ${formatBpm(Math.round(c.bpm * 10) / 10)} BPM · ${formatPctShort(c.accuracy)}`);
+      if (c.change) {
+        chip.append(node('span', `pass-arrow ${c.change === 'speedUp' ? 'up' : 'down'}`, c.change === 'speedUp' ? ' ↑' : ' ↓'));
+        chip.title = c.change === 'speedUp' ? 'This pass sped the trainer up' : 'This pass slowed the trainer down';
+      }
+      return chip;
+    }),
   );
 }
+
+// ---- Coach ---------------------------------------------------------------------
+
+const coachEl = el('coach');
+const coachTitleEl = el('coach-title');
+const coachSourceEl = el('coach-source');
+const coachSpeakInput = el<HTMLInputElement>('coach-speak');
+const coachGetButton = el<HTMLButtonElement>('coach-get');
+const coachHeadlineEl = el('coach-headline');
+const coachWellEl = el('coach-well');
+const coachFixEl = el('coach-fix');
+const coachNextEl = el('coach-next');
+const coachNoteEl = el('coach-note');
+const speaker = browserSpeaker();
+
+/** The report the panel is showing, and a counter so a late answer for an old session is ignored. */
+let coachReport: SessionReport | null = null;
+let coachGeneration = 0;
+let coachShown: CoachResponse | null = null;
+
+function hideCoach(): void {
+  coachGeneration++;
+  coachReport = null;
+  coachShown = null;
+  coachEl.hidden = true;
+  speaker.stop();
+}
+
+/** After a session: quick tips straight away; "Get coaching" asks Claude (via the local server). */
+function showCoach(run: LessonRun): void {
+  hideCoach();
+  if (run.passes.length === 0) return;
+  const trainer = run.trainer;
+  coachReport = buildSessionReport({
+    lesson: run.lesson,
+    passes: run.passes,
+    ...(trainer ? { trainer: { settings: trainer.settings, learned: trainer.done, finalBpm: trainer.bpm } } : {}),
+  });
+  coachGetButton.disabled = false;
+  coachGetButton.textContent = 'Get coaching';
+  renderCoaching({ source: 'rules', coaching: ruleBasedCoaching(coachReport) }, '');
+}
+
+function renderCoaching(response: CoachResponse, note: string): void {
+  const { coaching } = response;
+  coachShown = response;
+  coachEl.hidden = false;
+  coachTitleEl.textContent = response.source === 'claude' ? 'Coach' : 'Quick tips';
+  coachSourceEl.textContent = response.source === 'claude' ? 'from Claude' : 'rule-based, works offline';
+  coachHeadlineEl.textContent = coaching.headline;
+  const list = (items: string[], empty: string) => (items.length > 0 ? items.map((t) => node('li', '', t)) : [node('li', 'none', empty)]);
+  coachWellEl.replaceChildren(...list(coaching.wentWell, '—'));
+  coachFixEl.replaceChildren(...list(coaching.fixThis, 'Nothing stood out. Keep going.'));
+  coachNextEl.textContent = coaching.nextExercise;
+  coachNoteEl.textContent = note;
+  if (coachSpeakInput.checked) speaker.speak(coachingSpeech(coaching));
+}
+
+coachGetButton.addEventListener('click', () => {
+  coachGetButton.blur();
+  const report = coachReport;
+  if (!report) return;
+  const generation = coachGeneration;
+  coachGetButton.disabled = true;
+  coachGetButton.textContent = 'Asking the coach…';
+  void requestCoaching(report).then((response) => {
+    if (generation !== coachGeneration) return; // a new session started meanwhile
+    // Retrying only helps if the call failed; without a key it would just fail again.
+    const final = response.source === 'claude' || response.reason === 'no-key';
+    coachGetButton.disabled = final;
+    coachGetButton.textContent = response.source === 'claude' ? 'Got coaching' : response.reason === 'no-key' ? 'Claude coach off' : 'Try again';
+    renderCoaching(response, fallbackNote(response.reason));
+  });
+});
+
+coachSpeakInput.addEventListener('change', () => {
+  coachSpeakInput.blur();
+  if (!coachSpeakInput.checked) speaker.stop();
+  else if (coachShown && !coachEl.hidden) speaker.speak(coachingSpeech(coachShown.coaching));
+});
 
 renderLessonPicker();
 showLesson(selectedLesson());
@@ -1200,5 +1332,5 @@ updateLessonControls();
 // Dev-server only: handles for poking at the app from the console or a browser test script.
 // Vite strips this from production builds (import.meta.env.DEV is false there).
 if (import.meta.env.DEV) {
-  Object.assign(window, { __drumly: { metronome, manager, TestSource, ALL_LESSONS, lessonToExpectedNotes, highwayView: () => highwayView, lessonRun: () => lessonRun } });
+  Object.assign(window, { __drumly: { metronome, manager, TestSource, ALL_LESSONS, lessonToExpectedNotes, highwayView: () => highwayView, lessonRun: () => lessonRun, coachReport: () => coachReport } });
 }

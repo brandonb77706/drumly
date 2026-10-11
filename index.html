@@ -66,6 +66,21 @@
           <h3>Problem spots</h3>
           <ol id="problem-list"></ol>
         </div>
+        <section id="coach" class="coach" hidden aria-live="polite">
+          <div class="coach-head">
+            <h3 id="coach-title">Quick tips</h3>
+            <span id="coach-source" class="coach-source"></span>
+            <label class="check"><input id="coach-speak" type="checkbox" /> Read it to me</label>
+            <button id="coach-get" type="button">Get coaching</button>
+          </div>
+          <p id="coach-headline" class="coach-headline"></p>
+          <div class="coach-cols">
+            <div><h4>Went well</h4><ul id="coach-well"></ul></div>
+            <div><h4>Fix this</h4><ul id="coach-fix"></ul></div>
+          </div>
+          <p class="coach-next"><strong>Next time:</strong> <span id="coach-next"></span></p>
+          <p id="coach-note" class="hint"></p>
+        </section>
         <div id="lesson-summary"></div>
         <details class="lesson-text">
           <summary>Pattern as text</summary>

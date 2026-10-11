@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatMsStat, formatOffset, formatTimingPhrase } from './format';
+import { formatMeanOffset, formatOffset, formatPctShort, formatSpread, formatTimingPhrase } from './format';
 
 describe('formatOffset', () => {
   it('whole ms with a sign', () => {
@@ -33,12 +33,20 @@ describe('formatTimingPhrase', () => {
   });
 });
 
-describe('formatMsStat', () => {
-  it('keeps one decimal with a sign and never shows -0.0', () => {
-    expect(formatMsStat(null)).toBe('—');
-    expect(formatMsStat(-0.0000001)).toBe('0.0');
-    expect(formatMsStat(-0.04)).toBe('0.0');
-    expect(formatMsStat(3.25)).toBe('+3.3');
-    expect(formatMsStat(-12.34)).toBe('-12.3');
+describe('stat formats', () => {
+  it('means use formatOffset, spreads are whole ms', () => {
+    expect(formatMeanOffset(null)).toBe('—');
+    expect(formatMeanOffset(-0.04)).toBe('0 ms');
+    expect(formatMeanOffset(17.3)).toBe('+17 ms');
+    expect(formatSpread(null)).toBe('—');
+    expect(formatSpread(0)).toBe('0 ms');
+    expect(formatSpread(12.6)).toBe('13 ms');
+  });
+
+  it('short percentages drop a trailing .0', () => {
+    expect(formatPctShort(null)).toBe('—');
+    expect(formatPctShort(100)).toBe('100%');
+    expect(formatPctShort(92.857)).toBe('92.9%');
+    expect(formatPctShort(89.96)).toBe('90%');
   });
 });

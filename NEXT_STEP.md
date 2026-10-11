@@ -1,50 +1,59 @@
-# Next step: 6b (trainer polish), then Step 7 (session coach)
+# Next step: 7b (coach polish), then Step 8 (hear it, then play it)
 
-Read CLAUDE.md first. Steps 5b and 6 were reviewed: 234 tests, typecheck, and build pass, and the reviewer checked `nextLadderState` and `docs/steps/step-6-trainer.png`. The ladder, focus shading, and problem-spot ring all look right. The previous step file is archived in `docs/steps/step-5b-6.md`.
+Read CLAUDE.md first. The build order changed: drum sounds and recording come next, imports are step 9, saving is step 10. Steps 6b and 7 were reviewed: 280 tests, typecheck, and build pass. The reviewer confirmed the browser bundle has no SDK code or key, `.env` is ignored, and `.env.example` is tracked. The previous step file is archived in `docs/steps/step-6b-7.md`.
 
 Do part A first, then part B.
 
-## Part A: Step 6b, fixes from the trainer screenshot
+## Part A: Step 7b, fixes from the coach screenshot
 
-1. **Problem spots are too jumpy (your "worth your judgment" point, decided).** In the screenshot, Tom 2 is the #1 problem after being 35 ms late once in 3 passes, while every pass scored 100%. One slip isn't a problem spot. Keep the 20 ms strictness, but only list a note when it was off (missed, wrong pad, early, or late) in at least 2 passes and in at least a third of the passes it was graded in. When nothing qualifies, show "No problem spots yet. Keep going." Rings on the highway follow the same rule. Update the problem-spot tests, including a single-slip case that lists nothing.
-2. **Pass chips need the tempo.** "Pass 1: 100.0%" doesn't show that passes 1 and 2 were at 60 and pass 3 at 65. Change chips to "Pass 3 · 65 BPM · 100%". Mark the passes that triggered a speed-up or slow-down with a small arrow.
-3. **Loop checkbox while Trainer is on.** Trainer always loops, so disable the Loop checkbox and show it as checked while Trainer is on.
-4. **Stale status line.** "Count-in... then play. Looping until you press Stop." is still showing during pass 4. Clear the count-in text once bar 0 starts.
-5. **Number formats in the per-pad table.** Mean and std dev show "0.0" while the rest of the app uses `formatOffset` ("+17 ms", "0 ms"). Use whole ms everywhere, with `formatOffset` for means.
+1. **Coach contradicts itself.** The headline says "Fill learned. Nice work" and "Next time: move on to Full-bar tom run", while "Fix this" says Tom 2 keeps landing on Tom 3. Rule: if there are qualified problem spots, `nextExercise` must drill the worst one first (for example "Loop just beats 3 and 4 of bar 2 at 55 BPM until Tom 2 is clean 3 times in a row, then try the full fill"). Only suggest the next lesson when there are no problem spots. Soften the headline when the fill was learned with problem spots ("Fill learned at 65 BPM. One spot to clean up."). Add the same rule to the Claude system prompt. Test both cases.
+2. **Repetition.** The headline "Fill learned at 65 BPM" and the wentWell item "You learned it at 65 BPM" say the same thing. wentWell items must not repeat the headline. Test it.
+3. **Pass chip colors don't match the ladder.** Passes 3 and 4 at 90% counted as clean (threshold 90%) but their chips are gray while the 100% chips are green. Chip color must follow the ladder's own verdict: green clean, gray "almost", red rough.
+4. **Claude path check.** I can't confirm `output_config` with `effort` and a JSON schema format is accepted by `claude-haiku-5-5`. If an API call fails because of a parameter, log the API error message to the server console clearly (already done) and also show the reason in the UI next to "Quick tips" (for example "Claude coach unavailable: API rejected the request. See server console."), so the user can tell a key problem from a parameter problem.
 
-## Part B: Step 7, the session coach
+## Part B: Step 8, hear it, then play it
 
 ### Goal
-After a session, give the player advice like a drum teacher would: what went well, the one or two things to fix, and a specific exercise for next time. It must work without an internet connection or API key (rule-based), and optionally use Claude for more natural coaching.
+The player hears exactly what a fill should sound like before playing, can alternate "app plays, I play" until it matches, and can compare their take with the correct one by ear. They can also record a fill they hear elsewhere (a video, a song) by playing it in, and turn it into a lesson.
 
-### 1. Session report (pure, no AI)
-Create `src/coach/` with a pure `buildSessionReport(session)` that turns a finished practice or trainer session into a compact, structured summary. This is the single source of truth for both the rule-based coach and the AI coach:
-- lesson title and category, BPM range used, number of passes, whether the fill was learned
-- overall accuracy and accuracy trend across passes (improving, flat, or getting worse)
-- mean offset (rushing or dragging) and consistency (std dev), overall and per pad
-- timing tendency on the fill vs. the groove (for example "rushes the fill by 15 ms")
-- the qualified problem spots from part A, with drummer-counting labels
-- left vs. right hand is not known from MIDI, so do not guess hands
+### 1. Drum sound engine
+- Create `src/sound/` with synthesized drum voices using Web Audio only (no sample files, so no licensing issues): kick (sine with fast pitch drop), snare (noise burst plus tone body), hi-hat closed and open (high-passed noise, short and long decay), hi-hat pedal (very short), toms 1 to 3 (pitched sines with pitch drop, descending pitch), crash and ride (band-passed noise, long decay; ride bell brighter and shorter), rim and cross-stick (short click). Velocity controls loudness and slightly the brightness.
+- Schedule every sound on the AudioContext clock at exact times, using the same click times and clock conversion the metronome already uses. Never trigger lesson sounds with setTimeout.
+- Its own volume control ("Drums"), separate from the click volume. Share the metronome's AudioContext.
+- Keep the voice parameters in a pure, testable table; the Web Audio wiring stays thin.
 
-Keep the report small (a few hundred tokens as JSON) so it's cheap to send to the API. Unit test it with scripted sessions: a steadily improving session, a session that rushes the fill, and a session with a repeated wrong tom.
+### 2. Preview plays real drums
+- The existing Preview button now plays the lesson with drum sounds (plus the pad flashes and highway), so the player hears the fill.
 
-### 2. Rule-based coach (always available)
-A pure `ruleBasedCoaching(report)` that returns `{ headline, wentWell[], fixThis[], nextExercise }` from simple rules, for example:
-- mean offset on the fill below -15 ms → "You're rushing into the fill. Count '3 e and a' out loud and land the first tom on time."
-- repeated wrong pad on one note → "Tom 2 on the 'e' of 4 keeps landing on Tom 3. Play just beats 3 and 4 slowly until your hand finds Tom 2."
-- consistency worse than 25 ms → suggest dropping 10 BPM and using "Count-in only" click mode.
-- fill learned → suggest the next fill in the difficulty order.
-Cover each rule with a test. Keep the wording plain and short, like a teacher talking.
+### 3. Listen-then-play mode
+- New "Listen, then play" option: the app plays the focus range (or the whole lesson if there's no focus) with drum sounds, then the same section repeats silently and the player plays it. They alternate until stopped. Each player turn is graded on its own and works with the Trainer ladder (only player turns count).
+- The highway shows the app's turn in a distinct style (for example outlined notes and a "Listen" label) and the player's turn normally ("Your turn" label).
+- Timing must stay on the one metronome grid: the app's turn and the player's turn are consecutive sections of the same click timeline.
 
-### 3. Claude coach (optional)
-- The API key must never reach the browser or git. Add a tiny local server: a Vite dev-server middleware (or a small Node script started alongside `npm run dev`) with one route, `POST /api/coach`, that reads `ANTHROPIC_API_KEY` from a `.env` file and calls the Anthropic Messages API with the official `@anthropic-ai/sdk` package.
-- Add `.env` to `.gitignore` and create `.env.example` with `ANTHROPIC_API_KEY=` and `COACH_MODEL=claude-haiku-5-5`. Make the model configurable through `COACH_MODEL`, defaulting to `claude-haiku-5-5` (fast and cheap for short coaching).
-- The server sends the session report JSON plus a system prompt that makes Claude act as a friendly, direct drum teacher. It must base every claim on the report's numbers, never invent problems, keep it under 120 words, and return the same `{ headline, wentWell[], fixThis[], nextExercise }` shape as JSON. Validate the response shape on the server. If it's invalid, or the call fails, times out (10 s), or there's no key, return the rule-based coaching instead with a `source: 'rules'` flag.
-- The UI shows a "Coach" panel after a session ends (and a "Get coaching" button), with the source labeled ("Coach" vs. "Quick tips") so the player knows which they got.
-- Tests: mock the SDK. Cover valid response, invalid JSON, timeout, and no key falling back to rules. No real API calls in tests.
+### 4. Guide track
+- A "Guide drums" toggle that plays the correct drums quietly while the player plays along (useful at first, then turned off). Grading is unaffected.
 
-### 4. Hook for Jarvis later
-Add a `speak(text)` interface with a no-op default implementation and a browser `speechSynthesis` implementation behind a "Read it to me" toggle. ElevenLabs (Jarvis voice) can plug into the same interface later. Don't add ElevenLabs now.
+### 5. Hit sounds for the keyboard
+- When playing on the keyboard, play the drum sound for each hit, scheduled immediately, behind a "Hit sounds" toggle (default on for keyboard, off for MIDI, because the Roland module makes its own sound).
+
+### 6. Compare replay
+- After any graded pass, a "Compare" button plays: the correct version, a short gap, then the player's own hits exactly as played (real timing, real pads), both with drum sounds. The highway replays alongside. Option to play them at the same time, panned left (correct) and right (yours), to hear flams and drift.
+- The player's recorded hits come from the existing InputManager recording, so no new capture code is needed.
+
+### 7. Record a fill
+- New "Record" mode: choose bars (1 to 4), BPM, and grid (16ths or triplets). After a count-in, it records hits against the metronome.
+- Quantize each hit to the nearest grid step (pure, unit-tested function), merging duplicate hits on the same pad and step. Show the result in the lesson text format for editing, with a live highway preview and a "Play it back" button using the drum engine.
+- "Save as lesson" creates a custom fill (category "fill", focus range covering the recorded bars). Store custom lessons in localStorage (wrap every read and write in try/catch so the app still works if storage is blocked). Custom lessons appear in the picker under "My fills" and can be deleted.
+- Purpose: the player watches a fill on YouTube or Instagram, slows down with the app's 50% option, plays it in, fixes the text if needed, then learns it with the Trainer. The app never downloads or processes video.
+
+### Unit tests
+- Drum voice table: every pad has a voice; velocity scaling.
+- Sound scheduling: lesson notes map to exact AudioContext times via the existing clock conversion (fake AudioContext, assert scheduled `start(when)` values).
+- Listen-then-play: app turns and player turns alternate on consecutive sections; only player turns are graded and fed to the ladder.
+- Compare: correct and player timelines start at the same relative time; player hits keep their real offsets.
+- Quantize: hits snap to the nearest step, duplicates merge, triplet grid works, a hit exactly between two steps goes to the later one (deterministic).
+- Record round trip: a scripted recorded fill → quantize → text → parse gives back the same notes.
+- Custom lesson storage: save, load, delete, and graceful behavior when localStorage throws.
 
 ## Done means
-Tests, typecheck, and build pass with no `.env` present (rule-based path). Browser checks use your own headless Chromium with `--mute-audio`, never the user's Chrome. Save a screenshot of the Coach panel after a scripted trainer session as `docs/steps/step-7-coach.png`. Confirm `.env` is git-ignored with `git check-ignore .env`. Then append a `## Result` section to this file covering both parts, including whether the Claude path was tested with a real key (only if the user has created `.env` themselves; never ask for or handle the key).
+Tests, typecheck, and build pass. Browser checks use your own headless Chromium with `--mute-audio`, never the user's Chrome (sound can't be heard there, so verify scheduling through state or logs, not by ear). Save a screenshot of listen-then-play during "Your turn" as `docs/steps/step-8-listen.png`. Then append a `## Result` section covering both parts, including clearly what the user must check by ear.

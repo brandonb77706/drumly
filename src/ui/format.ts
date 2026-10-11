@@ -17,10 +17,19 @@ export function formatTimingPhrase(ms: number, onTimeMs = DEFAULT_TIMING_THRESHO
   return r > 0 ? `${r} ms late` : `${-r} ms early`;
 }
 
-/** A signed ms value with one decimal for stats, without "-0.0". */
-export function formatMsStat(v: number | null): string {
+/** A mean offset for stats: formatOffset, or "—" with nothing to average. */
+export function formatMeanOffset(v: number | null): string {
+  return v === null ? '—' : formatOffset(v);
+}
+
+/** An unsigned spread (std dev) in whole ms: "12 ms", or "—". */
+export function formatSpread(v: number | null): string {
+  return v === null ? '—' : `${Math.round(v)} ms`;
+}
+
+/** A percentage without a pointless ".0": "100%", "92.9%", or "—". */
+export function formatPctShort(v: number | null): string {
   if (v === null) return '—';
-  const fixed = v.toFixed(1);
-  if (Number(fixed) === 0) return '0.0';
-  return v > 0 ? `+${fixed}` : fixed;
+  const fixed = Number(v.toFixed(1));
+  return `${fixed}%`;
 }

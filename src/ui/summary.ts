@@ -1,27 +1,8 @@
-import type { Pad } from '../input';
+import { PAD_LABELS, type Pad } from '../input';
 import type { GradeStats, GradeSummary } from '../grading';
-import { formatMsStat } from './format';
+import { formatMeanOffset, formatSpread } from './format';
 
-export const PAD_LABELS: Record<Pad, string> = {
-  kick: 'Kick',
-  snare: 'Snare',
-  snareRim: 'Snare rim',
-  crossStick: 'Cross-stick',
-  hihatClosed: 'Hi-hat closed',
-  hihatOpen: 'Hi-hat open',
-  hihatPedal: 'Hi-hat pedal',
-  tom1: 'Tom 1',
-  tom2: 'Tom 2',
-  tom3: 'Tom 3',
-  crash: 'Crash',
-  crash2: 'Crash 2',
-  ride: 'Ride',
-  rideBell: 'Ride bell',
-};
-
-export function fmtMs(v: number | null): string {
-  return formatMsStat(v);
-}
+export { PAD_LABELS };
 
 export function fmtPct(v: number | null): string {
   return v === null ? '—' : `${v.toFixed(1)}%`;
@@ -54,18 +35,18 @@ export function buildSummary(s: GradeSummary): HTMLElement[] {
     stat('Wrong pad', String(s.wrongPad)),
     stat('Missed', String(s.missed)),
     stat('Extra', String(s.extra)),
-    stat('Mean offset', `${fmtMs(s.meanOffsetMs)} ms`, tendency(s.meanOffsetMs)),
-    stat('Consistency', `${s.stdDevOffsetMs === null ? '—' : s.stdDevOffsetMs.toFixed(1)} ms`, 'std dev, lower is steadier'),
+    stat('Mean offset', formatMeanOffset(s.meanOffsetMs), tendency(s.meanOffsetMs)),
+    stat('Consistency', formatSpread(s.stdDevOffsetMs), 'std dev, lower is steadier'),
     stat('Timing', `${t.perfect} / ${t.good}`, `perfect / good · ${t.early} early · ${t.late} late`),
   ]);
 
   const header = node('tr', '', undefined,
-    ['Pad', 'Expected', 'Hit', 'Wrong pad', 'Missed', 'Extra', 'Accuracy', 'Mean (ms)', 'Std dev (ms)'].map((h, i) => node('th', i === 0 ? '' : 'num', h)));
+    ['Pad', 'Expected', 'Hit', 'Wrong pad', 'Missed', 'Extra', 'Accuracy', 'Mean', 'Std dev'].map((h, i) => node('th', i === 0 ? '' : 'num', h)));
   const rows = (Object.entries(s.perPad) as [Pad, GradeStats][]).map(([pad, p]) =>
     node('tr', '', undefined, [
       node('td', '', PAD_LABELS[pad]),
-      ...[String(p.expected), String(p.hit), String(p.wrongPad), String(p.missed), String(p.extra), fmtPct(p.accuracy), fmtMs(p.meanOffsetMs),
-        p.stdDevOffsetMs === null ? '—' : p.stdDevOffsetMs.toFixed(1)].map((v) => node('td', 'num', v)),
+      ...[String(p.expected), String(p.hit), String(p.wrongPad), String(p.missed), String(p.extra), fmtPct(p.accuracy), formatMeanOffset(p.meanOffsetMs),
+        formatSpread(p.stdDevOffsetMs)].map((v) => node('td', 'num', v)),
     ]));
   const table = node('div', 'table-scroll', undefined, [
     node('table', '', undefined, [node('thead', '', undefined, [header]), node('tbody', '', undefined, rows)]),

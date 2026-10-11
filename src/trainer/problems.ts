@@ -19,6 +19,8 @@ export interface NoteProblemStats {
   /** Matched hits more than `onTimeMs` early / late. */
   early: number;
   late: number;
+  /** Passes where the note was off in any way (missed, wrong pad, early or late), counted once per pass. */
+  offPasses: number;
   offsetSum: number;
   offsetCount: number;
 }
@@ -38,10 +40,19 @@ export interface ProblemTrackerOptions {
    * threshold, so a note that is consistently "good but 30 ms late" still shows up.
    */
   onTimeMs?: number;
+  /** A note is a problem spot only if it was off in at least this many passes. Default 2. */
+  minOffPasses?: number;
+  /** ...and in at least this share of the passes it was graded in. Default 1/3. */
+  minOffShare?: number;
 }
 
+export const MIN_OFF_PASSES = 2;
+export const MIN_OFF_SHARE = 1 / 3;
+
 /**
- * Tracks each note across passes and ranks the worst ones.
+ * Tracks each note across passes and ranks the worst ones. One slip isn't a problem spot: a note
+ * qualifies only when it was off in at least `minOffPasses` passes and in at least `minOffShare`
+ * of the passes it was graded in.
  * Score: misses and wrong pads count 1 each, early or late hits 0.5 each. Ties go to the larger
  * average offset, then to the earlier note in the lesson, so the ranking is deterministic.
  */
@@ -49,6 +60,8 @@ export class ProblemTracker {
   private readonly byIndex = new Map<number, NoteProblemStats>();
   private readonly tracked: ReadonlySet<number>;
   private readonly onTimeMs: number;
+  private readonly minOffPasses: number;
+  private readonly minOffShare: number;
 
   constructor(
     readonly lesson: Lesson,
@@ -56,6 +69,8 @@ export class ProblemTracker {
   ) {
     this.tracked = options.focusOnly === false ? new Set(lesson.notes.keys()) : focusNoteIndices(lesson);
     this.onTimeMs = options.onTimeMs ?? DEFAULT_TIMING_THRESHOLDS.perfectMs;
+    this.minOffPasses = options.minOffPasses ?? MIN_OFF_PASSES;
+    this.minOffShare = options.minOffShare ?? MIN_OFF_SHARE;
   }
 
   /** Add one pass's note results (any notes outside the tracked set are ignored). */
@@ -67,16 +82,25 @@ export class ProblemTracker {
       s.passes++;
       if (r.status === 'missed') {
         s.missed++;
+        s.offPasses++;
         continue;
       }
+      let off = false;
       if (r.status === 'wrongPad') {
         s.wrongPad++;
         s.wrongPads.set(r.hit.pad, (s.wrongPads.get(r.hit.pad) ?? 0) + 1);
+        off = true;
       }
       s.offsetSum += r.offsetMs;
       s.offsetCount++;
-      if (r.offsetMs < -this.onTimeMs) s.early++;
-      else if (r.offsetMs > this.onTimeMs) s.late++;
+      if (r.offsetMs < -this.onTimeMs) {
+        s.early++;
+        off = true;
+      } else if (r.offsetMs > this.onTimeMs) {
+        s.late++;
+        off = true;
+      }
+      if (off) s.offPasses++;
     }
   }
 
@@ -84,15 +108,20 @@ export class ProblemTracker {
     return [...this.byIndex.values()].sort((a, b) => a.index - b.index);
   }
 
-  /** The `count` worst notes with any problem, worst first. */
+  /** True if the note was off often enough to count as a problem spot (see the class comment). */
+  qualifies(s: NoteProblemStats): boolean {
+    return s.offPasses >= this.minOffPasses && s.offPasses >= this.minOffShare * s.passes;
+  }
+
+  /** The `count` worst notes that qualify as problem spots, worst first. */
   worst(count = 3): ProblemSpot[] {
     return this.stats()
+      .filter((stats) => stats.offPasses > 0 && this.qualifies(stats))
       .map((stats) => ({
         stats,
         score: stats.missed + stats.wrongPad + 0.5 * (stats.early + stats.late),
         meanOffsetMs: stats.offsetCount > 0 ? stats.offsetSum / stats.offsetCount : null,
       }))
-      .filter((p) => p.score > 0)
       .sort((a, b) => b.score - a.score || Math.abs(b.meanOffsetMs ?? 0) - Math.abs(a.meanOffsetMs ?? 0) || a.stats.index - b.stats.index)
       .slice(0, count);
   }
@@ -131,6 +160,7 @@ export class ProblemTracker {
         wrongPads: new Map(),
         early: 0,
         late: 0,
+        offPasses: 0,
         offsetSum: 0,
         offsetCount: 0,
       };
