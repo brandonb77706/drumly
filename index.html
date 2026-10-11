@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Drumly</title>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Drumly</h1>
+        <div class="status">
+          <div><span class="dot" id="kb-dot"></span><strong>Keyboard:</strong> <span id="kb-status">starting…</span></div>
+          <div><span class="dot" id="midi-dot"></span><strong>MIDI:</strong> <span id="midi-status">starting…</span></div>
+        </div>
+      </header>
+
+      <section class="panel lesson">
+        <div class="lesson-head">
+          <label class="lesson-pick">Lesson
+            <select id="lesson-select"></select>
+          </label>
+          <label>BPM
+            <input id="lesson-bpm" type="number" min="30" max="300" step="1" />
+          </label>
+          <label class="check"><input id="lesson-loop" type="checkbox" /> Loop</label>
+          <button id="lesson-start" type="button" class="primary">Start</button>
+        </div>
+        <p id="lesson-description" class="lesson-description"></p>
+        <pre id="lesson-pattern" class="lesson-pattern"></pre>
+        <p id="lesson-keys" class="hint"></p>
+        <div class="met-top">
+          <div id="beats" class="beats" aria-label="Beat indicator"></div>
+          <span id="bar-label" class="bar-label"></span>
+          <div id="lesson-pads" class="lesson-pads"></div>
+        </div>
+        <p id="lesson-status" class="grade-status"></p>
+        <p id="lesson-feedback" class="lesson-feedback"></p>
+        <div id="lesson-history" class="lesson-history"></div>
+        <div id="lesson-summary"></div>
+      </section>
+
+      <details class="debug" id="debug">
+        <summary>Debug</summary>
+
+      <section class="panel metronome">
+        <h2>Metronome</h2>
+        <div class="met-top">
+          <button id="met-toggle" type="button" class="primary">Start</button>
+          <span class="hint">The beat indicator is in the lesson panel above.</span>
+        </div>
+        <div class="controls">
+          <label class="bpm">BPM
+            <input id="bpm-range" type="range" min="30" max="300" step="1" value="100" />
+            <input id="bpm-number" type="number" min="30" max="300" step="1" value="100" />
+          </label>
+          <label>Beats per bar
+            <input id="beats-per-bar" type="number" min="1" max="16" step="1" value="4" />
+          </label>
+          <label>Subdivision
+            <select id="subdivision">
+              <option value="quarter">Quarter</option>
+              <option value="eighth" selected>8th</option>
+              <option value="sixteenth">16th</option>
+              <option value="triplet">Triplet</option>
+            </select>
+          </label>
+          <label>Volume
+            <input id="volume" type="range" min="0" max="100" step="1" value="80" />
+          </label>
+          <label>Latency offset (ms)
+            <input id="latency" type="number" step="1" value="0" />
+          </label>
+          <label class="check"><input id="accent" type="checkbox" checked /> Accent beat 1</label>
+          <label class="check"><input id="count-in" type="checkbox" /> 1-bar count-in</label>
+        </div>
+        <p class="hint" id="clock-info">Audio starts when you press Start (browser autoplay rules).</p>
+      </section>
+
+      <section class="panel grading">
+        <h2>Grade test</h2>
+        <p class="hint">100 BPM rock beat, 2 bars, graded from bar 1 after a 1-bar count-in. Play along on the keys, or replay a scripted run.</p>
+        <div id="grade-buttons" class="grade-buttons"></div>
+        <p id="grade-status" class="grade-status"></p>
+        <div id="grade-summary"></div>
+      </section>
+
+      <section>
+        <h2>Pads</h2>
+        <div id="pads" class="pads"></div>
+      </section>
+
+      <section class="row">
+        <div class="panel">
+          <h2>Keyboard map</h2>
+          <p class="hint">Hold <kbd>Shift</kbd> for an accent (velocity 127). Normal hits are 90.</p>
+          <ul id="keymap" class="keymap"></ul>
+          <button id="play" type="button">Play test pattern</button>
+          <p class="hint">Rock beat, 2 bars, locked to the metronome (starts it if needed). Best with 8th subdivision.</p>
+        </div>
+
+        <div class="panel grow">
+          <h2>Last 30 hits</h2>
+          <table>
+            <thead>
+              <tr><th>Pad</th><th class="num">Velocity</th><th class="num">Gap (ms)</th><th class="num" title="Negative = early, positive = late">Offset from nearest click (ms)</th><th>Grade</th><th>Source</th></tr>
+            </thead>
+            <tbody id="log"></tbody>
+          </table>
+        </div>
+      </section>
+      </details>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
