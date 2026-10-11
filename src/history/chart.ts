@@ -105,6 +105,52 @@ export function barChart(values: readonly number[], box: ChartBox, options: { mi
   return { bars, yTicks: ticks.map((value) => ({ value, y: box.top + plotH * (1 - value / (top || 1)) })) };
 }
 
+export interface XLabel {
+  /** Index into the input times. */
+  readonly index: number;
+  readonly text: string;
+  readonly anchor: 'start' | 'middle' | 'end';
+}
+
+export interface XAxis {
+  readonly labels: XLabel[];
+  /** 'time' when every session is on one local day; that day is then `day` (for the caption). */
+  readonly mode: 'date' | 'time';
+  readonly day: string | null;
+}
+
+/**
+ * Labels for evenly spaced session points: dates ("Oct 11") when the sessions span more than one
+ * local day, times ("1:26 PM") when they're all on one day. At most `maxLabels`, spread evenly from
+ * the first point to the last so they never overlap; a label already shown isn't repeated
+ * (several sessions on one day, or in one minute). Pure: the locale is a parameter (undefined = the browser's).
+ */
+export function xAxisLabels(times: readonly number[], options: { maxLabels?: number; locale?: string } = {}): XAxis {
+  const n = times.length;
+  if (n === 0) return { labels: [], mode: 'date', day: null };
+  const max = Math.max(1, options.maxLabels ?? 6);
+  const dayKey = (t: number) => new Date(t).toDateString();
+  const sameDay = times.every((t) => dayKey(t) === dayKey(times[0]!));
+  const dateText = (t: number) => new Date(t).toLocaleDateString(options.locale, { month: 'short', day: 'numeric' });
+  const timeText = (t: number) => new Date(t).toLocaleTimeString(options.locale, { hour: 'numeric', minute: '2-digit' });
+
+  let picked: number[];
+  if (n <= max) picked = times.map((_, i) => i);
+  else if (max === 1) picked = [0];
+  else picked = [...new Set(Array.from({ length: max }, (_, k) => Math.round((k * (n - 1)) / (max - 1))))];
+
+  const labels: XLabel[] = [];
+  const shown = new Set<string>();
+  for (const index of picked) {
+    const text = sameDay ? timeText(times[index]!) : dateText(times[index]!);
+    if (shown.has(text)) continue;
+    shown.add(text);
+    const anchor = n === 1 ? 'middle' : index === 0 ? 'start' : index === n - 1 ? 'end' : 'middle';
+    labels.push({ index, text, anchor });
+  }
+  return { labels, mode: sameDay ? 'time' : 'date', day: sameDay ? dateText(times[0]!) : null };
+}
+
 function fmt(v: number): string {
   return String(Math.round(v * 100) / 100);
 }

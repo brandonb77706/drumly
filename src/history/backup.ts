@@ -92,10 +92,21 @@ export function readSettings(raw: unknown): HistorySettings {
   const out: { -readonly [K in keyof HistorySettings]: HistorySettings[K] } = {};
   if (typeof r.clickMode === 'string') out.clickMode = r.clickMode;
   if (typeof r.hitSounds === 'string') out.hitSounds = r.hitSounds;
-  if (typeof r.drumsVolume === 'number' && Number.isFinite(r.drumsVolume)) out.drumsVolume = r.drumsVolume;
-  if (typeof r.clickVolume === 'number' && Number.isFinite(r.clickVolume)) out.clickVolume = r.clickVolume;
+  const inRange = (v: unknown, min: number, max: number): v is number => typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max;
+  if (inRange(r.drumsVolume, 0, 100)) out.drumsVolume = r.drumsVolume;
+  if (inRange(r.clickVolume, 0, 100)) out.clickVolume = r.clickVolume;
   if (typeof r.guideDrums === 'boolean') out.guideDrums = r.guideDrums;
   if (typeof r.coachSpeak === 'boolean') out.coachSpeak = r.coachSpeak;
+  if (inRange(r.speed, 0.05, 4)) out.speed = r.speed;
+  if (typeof r.lessonId === 'string' && r.lessonId !== '') out.lessonId = r.lessonId;
+  if (typeof r.loop === 'boolean') out.loop = r.loop;
+  if (typeof r.trainer === 'boolean') out.trainer = r.trainer;
+  if (typeof r.listen === 'boolean') out.listen = r.listen;
+  if (inRange(r.trainerStepBpm, 1, 50)) out.trainerStepBpm = r.trainerStepBpm;
+  if (inRange(r.trainerPassThreshold, 1, 100)) out.trainerPassThreshold = r.trainerPassThreshold;
+  if (inRange(r.trainerPassesNeeded, 1, 10)) out.trainerPassesNeeded = Math.round(r.trainerPassesNeeded);
+  if (r.tab === 'practice' || r.tab === 'progress') out.tab = r.tab;
+  if (r.progressLesson === null || (typeof r.progressLesson === 'string' && r.progressLesson !== '')) out.progressLesson = r.progressLesson;
   return out;
 }
 

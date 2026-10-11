@@ -213,12 +213,27 @@ export interface SeriesPoint {
   readonly value: number | null;
 }
 
+/** What a chart point shows on hover or tap: the session's best pass. */
+export interface SessionPointInfo {
+  /** Session start, wall-clock ms. */
+  readonly at: number;
+  /** Best accuracy of the session, or null. */
+  readonly accuracy: number | null;
+  /** Tempo of that best pass (the fastest one on a tie), or of the fastest pass with no accuracy. */
+  readonly bpm: number | null;
+}
+
 /** The lesson detail charts: best accuracy and fastest clean tempo per session, oldest first. */
-export function lessonSeries(sessions: readonly SessionRecord[]): { accuracy: SeriesPoint[]; cleanBpm: SeriesPoint[] } {
+export function lessonSeries(sessions: readonly SessionRecord[]): { accuracy: SeriesPoint[]; cleanBpm: SeriesPoint[]; info: SessionPointInfo[] } {
   const list = [...sessions].filter((s) => s.passes.length > 0).sort((a, b) => a.startedAt - b.startedAt);
   return {
     accuracy: list.map((s) => ({ at: s.startedAt, value: sessionBestAccuracy(s) })),
     cleanBpm: list.map((s) => ({ at: s.startedAt, value: sessionCleanBpm(s) })),
+    info: list.map((s) => {
+      const accuracy = sessionBestAccuracy(s);
+      const bpms = s.passes.filter((p) => accuracy === null || p.focusAccuracy === accuracy).map((p) => p.bpm);
+      return { at: s.startedAt, accuracy, bpm: bpms.length > 0 ? Math.max(...bpms) : null };
+    }),
   };
 }
 

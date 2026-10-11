@@ -145,5 +145,6 @@ describe('per-lesson list and trends', () => {
     const series = lessonSeries([s('b', 2, 80, 95, true), s('a', 1, 70, 90, false)]);
     expect(series.accuracy).toEqual([{ at: at(10, 1), value: 70 }, { at: at(10, 2), value: 80 }]);
     expect(series.cleanBpm).toEqual([{ at: at(10, 1), value: null }, { at: at(10, 2), value: 95 }]);
+    expect(series.info).toEqual([{ at: at(10, 1), accuracy: 70, bpm: 90 }, { at: at(10, 2), accuracy: 80, bpm: 95 }]);
   });
 });

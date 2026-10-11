@@ -1,27 +1,38 @@
-# Next step: 10b (progress polish, exact pass summaries, README)
+# Next step: Step 11, Kit day (do this only once the Roland kit is plugged in)
 
-Read CLAUDE.md first. Steps 9b and 10 were reviewed: 427 tests, typecheck, and build pass with no `.env`, the bundle has no SDK or key, and the port is pinned to 5173. The reviewer looked at `docs/steps/step-10-progress.png`. Thanks for correcting the reviewer: looped runs were using live results for the coach and Compare, and you fixed it. The previous step file is archived in `docs/steps/step-9b-10.md`.
+Read CLAUDE.md first. Step 10b was reviewed: 446 tests, typecheck, and build pass with no `.env`. The previous step file is archived in `docs/steps/step-10b.md`.
 
-Step 11 (Kit day) has to wait until the Roland kit is back around Oct 25. This step is the last one before that.
+**Do not start this step until the user says the kit is connected.** If the kit isn't connected, stop and say so.
 
-## 1. Exact per-pass summaries in loops
-The summary shown at the end of each looped pass is still live. A pass is only a few bars, so grading it in full is cheap. At the end of each pass, run the batch grader over just that pass's notes and hits (with the matching window extended by `windowMs` on both edges so boundary hits are handled), and use that for the pass summary, the pass chip, the ladder decision, personal bests, and the saved session. Live colors during play can stay settled/live. Add a test where a sloppy looped run gives a pass summary identical to a batch grade of that pass.
+## Goal
+Make the app accurate on the real kit: every pad maps correctly, the delay between hitting a pad and the app seeing it is measured and corrected, and the timing thresholds fit real drumming instead of keyboard taps.
 
-## 2. Progress chart x-axis
-In the screenshot, every x-axis label reads "Oct 11", because all sessions were the same day. Label points by date when sessions span multiple days, and by time ("1:26 PM") when they're all on one day. Show at most about 6 labels, so they never overlap. Hovering (or tapping) a point shows that session's date, time, accuracy, and BPM. Keep the label logic in a pure tested function.
+## 1. Kit check screen
+- A "Kit setup" view that shows the connected MIDI device name and asks the user to hit each pad in turn (kick, snare head, snare rim, hi-hat closed and open, pedal, each tom head and rim, crash edge and bow, ride bow, edge, and bell).
+- For each prompt, record the MIDI note numbers that arrive. Show any note that doesn't map, or maps to the wrong pad, and let the user fix it with a dropdown.
+- Save the result as a per-kit pad map (keyed by device name) in IndexedDB, used by `MidiSource` in place of the default `MIDI_NOTE_TO_PAD`. Include it in the export file.
+- Log the raw MIDI messages seen (note, velocity, control changes like hi-hat pedal position) to a collapsible panel, so the user can paste them to the reviewer.
 
-## 3. Remember settings between page loads
-Settings (click mode, volumes, hit sounds, guide drums, speed, last lesson, trainer settings, Progress tab state) reset on reload. Save them in localStorage as a per-browser convenience, wrapped in try/catch so a blocked storage doesn't break anything. Include them in the existing export file as now. Test load, save, and a corrupted or missing value falling back to defaults.
+## 2. Latency calibration
+- "Calibrate": play a click at 90 BPM for 16 beats and ask the user to hit the snare exactly with it. Ignore the first 4 hits, take the median offset of the rest (median, not mean, so one flub doesn't skew it), and show it with the spread.
+- Explain in one line that this measures the combined delay of the speakers, the kit's MIDI, and the user's own feel.
+- If the spread is over 30 ms, ask the user to redo it.
+- Save the result as the latency offset (the existing setting), per device, and include it in the export. This fixes the open issue that the latency offset wasn't saved.
+- Check the existing offset direction with a unit test: a player who is consistently 25 ms late in calibration should then grade around 0 ms on a perfect-feeling run.
 
-## 4. README for the portfolio
-Write `README.md` for someone seeing the project on GitHub:
-- one-paragraph pitch and a screenshot (use the existing step screenshots in `docs/steps/`)
-- feature list in plain language
-- how it works: input layer, Web Audio lookahead scheduling and clock alignment, the order-preserving alignment grader (why greedy failed), the tempo ladder, the coach with rule-based fallback
-- tech stack, how to run (`npm install`, `npm run dev`, Chrome or Edge for MIDI), optional `.env` for the Claude features
-- testing: how many tests and what the browser checks cover
-- privacy note: history stays in the browser; the API key stays in `.env` on the local server
-Keep it honest: say the real kit hasn't been tested yet and thresholds will be tuned on Kit day.
+## 3. Threshold tuning
+- Add a "Timing feel" check: after calibration, the user plays the 8th-note rock beat at 90 BPM for 8 bars with the click. Report the spread per pad.
+- Suggest perfect and good thresholds from the result (perfect about 1x their spread, good about 2x, clamped to sane ranges such as perfect 15 to 30 ms and good 30 to 60 ms), and let the user accept or keep the defaults. Same for the coach's "rushing" and "loose timing" limits, and the problem-spot strictness.
+- Save accepted thresholds as user settings and include them in the export.
+
+## 4. Real-input regression check
+- Record one real 8-bar session and save its raw hits as a test fixture (`src/fixtures/kit-session.json`). Add a test that grades it and checks the result stays stable, so later changes can't silently break real-kit grading.
+
+## Unit tests
+- Calibration math: median offset, ignores warm-up hits, spread, redo when spread is too high.
+- Pad map: per-device map overrides the default; unknown devices use the default; export and import round trip.
+- Threshold suggestions: clamping, rounding, accept vs keep defaults.
+- The real-session fixture grades the same every time.
 
 ## Done means
-Tests, typecheck, and build pass with no `.env`. Browser checks use your own headless Chromium with `--mute-audio`, never the user's Chrome, and never the user's dev server on 5173. Append a `## Result` section.
+Tests, typecheck, and build pass. This step needs the user at the kit, so list exactly what the user did and what was measured (device name, latency offset, spread, suggested thresholds) in a `## Result` section.

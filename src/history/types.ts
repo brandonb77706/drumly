@@ -106,12 +106,31 @@ export interface SessionRecord {
   readonly bestPass: BestPassRecord | null;
 }
 
-/** App settings carried in a history export. */
+/**
+ * App settings: remembered in this browser between page loads (history/settings.ts) and carried
+ * in a history export. Every field is optional; a missing one keeps the app's default.
+ */
 export interface HistorySettings {
   readonly clickMode?: string;
   readonly hitSounds?: string;
+  /** 0-100. */
   readonly drumsVolume?: number;
+  /** 0-100. */
   readonly clickVolume?: number;
   readonly guideDrums?: boolean;
   readonly coachSpeak?: boolean;
+  /** Practice speed, a fraction of the lesson's default BPM (e.g. 0.75). */
+  readonly speed?: number;
+  /** The lesson picked last. */
+  readonly lessonId?: string;
+  readonly loop?: boolean;
+  readonly trainer?: boolean;
+  readonly listen?: boolean;
+  /** Trainer ladder settings that don't depend on the lesson (start and target BPM do). */
+  readonly trainerStepBpm?: number;
+  readonly trainerPassThreshold?: number;
+  readonly trainerPassesNeeded?: number;
+  /** Which tab was open, and the lesson whose Progress detail was open (null: the lesson list). */
+  readonly tab?: 'practice' | 'progress';
+  readonly progressLesson?: string | null;
 }

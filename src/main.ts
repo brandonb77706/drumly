@@ -12,7 +12,7 @@ import {
   type ScriptedHit,
 } from './input';
 import { rockBeat } from './patterns';
-import { LiveGrader, DEFAULT_GRADING_CONFIG, summarize, type ExpectedNote, type GradeResult, type GradeSummary, type HitVerdict } from './grading';
+import { LiveGrader, DEFAULT_GRADING_CONFIG, gradeSpan, summarize, type ExpectedNote, type GradeResult, type GradeSummary, type HitVerdict } from './grading';
 import { GRADE_BARS, GRADE_BPM, GRADE_SCENARIOS, checkSummary, rockBeatNotes, type GradeScenario } from './gradeScenarios';
 import { Metronome, MAX_BPM, MIN_BPM, SUBDIVISIONS, clicksPerBeat, isClickMode, type ClickMode, type MetronomeClick, type Subdivision } from './metronome';
 import {
@@ -34,7 +34,6 @@ import {
   lessonToExpectedNotes,
   noteId,
   notePass,
-  resultForPass,
   type Lesson,
   type LessonCategory,
   type LessonFocus,
@@ -67,6 +66,7 @@ import {
 import { formatOffset, formatPctShort, formatTimingPhrase, passChipClass } from './ui/format';
 import { HistoryStore } from './history/store';
 import { buildSessionRecord, passRecord, recordingSessionRecord, replayTake } from './history/record';
+import { loadSettings, saveSettings } from './history/settings';
 import { NO_BESTS, addPassToBests, bestsByLesson, type PersonalBests } from './history/stats';
 import { buildHistoryFile, historyFileName, importCounts, parseHistoryFile, type HistoryFile } from './history/backup';
 import type { HistorySettings, SessionMode, SessionRecord } from './history/types';
@@ -1038,27 +1038,12 @@ function formatBpm(bpm: number): string {
   return String(Number(bpm.toFixed(2)));
 }
 
-// Click mode: remembered for this page session only.
-const CLICK_MODE_KEY = 'drumly.clickMode';
-function loadClickMode(): ClickMode {
-  try {
-    const saved = sessionStorage.getItem(CLICK_MODE_KEY);
-    if (isClickMode(saved)) return saved;
-  } catch {
-    // storage unavailable: use the default
-  }
-  return 'on';
-}
+// Click mode: remembered with the other settings (see "Settings between page loads").
 function setClickMode(mode: ClickMode): void {
   metronome.setClickMode(mode);
   clickModeSelect.value = mode;
-  try {
-    sessionStorage.setItem(CLICK_MODE_KEY, mode);
-  } catch {
-    // storage unavailable: the choice still applies until reload
-  }
 }
-setClickMode(loadClickMode());
+setClickMode('on');
 clickModeSelect.addEventListener('change', () => {
   clickModeSelect.blur();
   if (isClickMode(clickModeSelect.value)) setClickMode(clickModeSelect.value);
@@ -1424,17 +1409,9 @@ function stopLesson(message: string, finished: LessonRun | null = null): void {
   freezeHighway();
   if (run) {
     const final = run.grader.stop();
-    // Show the final batch grade on the highway, so it agrees with the summary.
+    // Show the final batch grade on the highway. Each reported pass was already batch-graded on
+    // its own (gradeSpan), and the coach, Compare and saved history use exactly that grade.
     highwayView?.model.syncResults(final.results);
-    // The coach, Compare and saved history use each pass's slice of the final batch grade, not the
-    // live one (which can differ slightly for sloppy playing, see LiveGraderOptions.settleMs).
-    const windowMs = DEFAULT_GRADING_CONFIG.windowMs;
-    run.takes.forEach((take, i) => {
-      const result = resultForPass(final.results, take.pass, take.start - windowMs, take.end - windowMs);
-      run.takes[i] = { ...take, result };
-      const pass = run.passes[i];
-      if (pass) run.passes[i] = { ...pass, result };
-    });
     if (run.trainer) showProblemSpots(run.trainer);
   }
   if (metronome.isRunning) stopMetronome();
@@ -1517,14 +1494,15 @@ function lessonFrame(now: number): void {
   const windowMs = DEFAULT_GRADING_CONFIG.windowMs;
   if (now <= passWin.lastNote + windowMs + PASS_REPORT_GRACE_MS) return;
 
-  // Pass k is over. Single run: final batch grade. Loop: this pass's slice of the live grade.
+  // Pass k is over. Single run: final batch grade. Loop: a batch grade of just this pass, so the
+  // summary, chip, ladder, bests and saved session never depend on live (settled) verdicts.
   let result: GradeResult;
   if (!run.loop) {
     const final = run.grader.stop();
     highwayView?.model.syncResults(final.results);
     result = final.results;
   } else {
-    result = resultForPass(run.grader.getResults(), k, passWin.start - windowMs, passWin.end - windowMs);
+    result = run.grader.gradeSpan(passWin.start, passWin.end, (n) => notePass(n.id) === k);
     run.passWindows.delete(k);
   }
   run.nextPass = run.plan.nextGraded(k);
@@ -2470,9 +2448,11 @@ const progressDetailEl = el('progress-detail');
 /** The lesson whose detail view is open, or null for the list. */
 let progressLesson: string | null = null;
 let progressGeneration = 0;
+let currentTab: 'practice' | 'progress' = 'practice';
 
 function showTab(tab: 'practice' | 'progress'): void {
   const progress = tab === 'progress';
+  currentTab = tab;
   if (progress) {
     // Leaving the practice screen ends whatever was playing (and saves it).
     if (recordRun || recordStarting) cancelRecording('Recording stopped.');
@@ -2485,12 +2465,14 @@ function showTab(tab: 'practice' | 'progress'): void {
   tabProgressButton.classList.toggle('active', progress);
   tabPracticeButton.setAttribute('aria-pressed', String(!progress));
   tabProgressButton.setAttribute('aria-pressed', String(progress));
+  persistSettings();
   if (progress) void renderProgress();
 }
 
 /** Load every session and draw the overview, the lesson list, or one lesson's detail. */
 async function renderProgress(): Promise<void> {
   const generation = ++progressGeneration;
+  persistSettings(); // the open lesson detail is remembered
   const sessions = await history.listSessions();
   if (generation !== progressGeneration) return;
   renderOverview(progressOverviewEl, sessions, Date.now());
@@ -2559,8 +2541,16 @@ const importApplyButton = el<HTMLButtonElement>('import-apply');
 const importCancelButton = el<HTMLButtonElement>('import-cancel');
 const backupStatusEl = el('backup-status');
 
-/** The settings an export carries (click mode, sounds, volumes, guide drums, read-aloud). */
+/**
+ * The settings remembered between page loads and carried in an export: click mode, sounds,
+ * volumes, guide drums, read-aloud, speed, last lesson, loop/trainer/listen and the trainer's
+ * ladder, and which tab (and Progress lesson) was open.
+ */
 function currentSettings(): HistorySettings {
+  const num = (input: HTMLInputElement) => (input.value !== '' && Number.isFinite(Number(input.value)) ? { value: Number(input.value) } : null);
+  const step = num(trainerStepInput);
+  const threshold = num(trainerThresholdInput);
+  const passes = num(trainerPassesInput);
   return {
     clickMode: clickModeSelect.value,
     hitSounds: hitSoundMode,
@@ -2568,9 +2558,20 @@ function currentSettings(): HistorySettings {
     clickVolume: Number(clickVolumeInput.value),
     guideDrums: guideInput.checked,
     coachSpeak: coachSpeakInput.checked,
+    speed: selectedSpeed(),
+    lessonId: selectedLesson().id,
+    loop: loopChoice,
+    trainer: lessonTrainerInput.checked,
+    listen: lessonListenInput.checked,
+    ...(step ? { trainerStepBpm: step.value } : {}),
+    ...(threshold ? { trainerPassThreshold: threshold.value } : {}),
+    ...(passes ? { trainerPassesNeeded: passes.value } : {}),
+    tab: currentTab,
+    progressLesson,
   };
 }
 
+/** Practice settings from saved or imported settings. The lesson and tab are applied at startup only. */
 function applySettings(settings: HistorySettings): void {
   if (isClickMode(settings.clickMode)) setClickMode(settings.clickMode);
   if (settings.hitSounds !== undefined && isHitSoundMode(settings.hitSounds)) {
@@ -2588,7 +2589,28 @@ function applySettings(settings: HistorySettings): void {
   }
   if (settings.guideDrums !== undefined) guideInput.checked = settings.guideDrums;
   if (settings.coachSpeak !== undefined) coachSpeakInput.checked = settings.coachSpeak;
+  if (settings.speed !== undefined && (SPEED_OPTIONS as readonly number[]).includes(settings.speed)) lessonSpeedSelect.value = String(settings.speed);
+  if (settings.loop !== undefined) loopChoice = settings.loop;
+  if (settings.trainer !== undefined) lessonTrainerInput.checked = settings.trainer;
+  if (settings.listen !== undefined) lessonListenInput.checked = settings.listen;
+  if (settings.trainerStepBpm !== undefined) trainerStepInput.value = String(settings.trainerStepBpm);
+  if (settings.trainerPassThreshold !== undefined) trainerThresholdInput.value = String(settings.trainerPassThreshold);
+  if (settings.trainerPassesNeeded !== undefined) trainerPassesInput.value = String(settings.trainerPassesNeeded);
+  if (!lessonRun && !previewRun && !lessonStarting) {
+    lessonBpmInput.value = formatBpm(lessonBpmAt(selectedLesson(), selectedSpeed()));
+    updateLessonControls();
+  }
 }
+
+// ---- Settings between page loads ------------------------------------------------
+// A per-browser convenience in localStorage. Blocked storage just means defaults on every load.
+
+const settingsStorage = () => window.localStorage;
+function persistSettings(): void {
+  saveSettings(settingsStorage, currentSettings());
+}
+// Every setting is a form control: save after any committed change (this runs after the control's own handler).
+document.addEventListener('change', persistSettings);
 
 /** The previous download's object URL, released on the next export. */
 let exportUrl: string | null = null;
@@ -2663,9 +2685,15 @@ importApplyButton.addEventListener('click', () => {
   });
 });
 
+// Restore the settings saved in this browser, then the lesson and tab that were open.
+const savedSettings = loadSettings(settingsStorage);
+applySettings(savedSettings);
 renderLessonPicker();
+if (savedSettings.lessonId && allLessons().some((l) => l.id === savedSettings.lessonId)) lessonSelect.value = savedSettings.lessonId;
 showLesson(selectedLesson());
 updateLessonControls();
+if (savedSettings.progressLesson !== undefined) progressLesson = savedSettings.progressLesson;
+if (savedSettings.tab === 'progress') showTab('progress');
 
 // Dev-server only: handles for poking at the app from the console or a browser test script.
 // Vite strips this from production builds (import.meta.env.DEV is false there).
@@ -2677,6 +2705,8 @@ if (import.meta.env.DEV) {
       TestSource,
       ALL_LESSONS,
       lessonToExpectedNotes,
+      summarize,
+      gradeSpan,
       highwayView: () => highwayView,
       lessonRun: () => lessonRun,
       coachReport: () => coachReport,

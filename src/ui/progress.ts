@@ -1,5 +1,5 @@
-import { barChart, lineChart, type ChartBox } from '../history/chart';
-import { dailyMinutes, lessonSeries, lessonSummaries, personalBests, practiceStreak, weekSummary, type LessonSummary, type TrendArrow } from '../history/stats';
+import { barChart, lineChart, xAxisLabels, type ChartBox } from '../history/chart';
+import { dailyMinutes, lessonSeries, lessonSummaries, personalBests, practiceStreak, weekSummary, type LessonSummary, type SessionPointInfo, type TrendArrow } from '../history/stats';
 import type { SessionMode, SessionRecord } from '../history/types';
 import { node } from './summary';
 import { formatDuration, formatPctShort } from './format';
@@ -152,8 +152,8 @@ export function renderLessonDetail(container: HTMLElement, lessonId: string, all
   }
 
   const charts = node('div', 'chart-row', undefined, [
-    lineFigure('Accuracy per session (best pass)', series.accuracy.map((p) => p.value), series.accuracy.map((p) => p.at), { yMin: 0, yMax: 100, unit: '%' }),
-    lineFigure('Fastest clean tempo per session', series.cleanBpm.map((p) => p.value), series.cleanBpm.map((p) => p.at), { unit: ' BPM', empty: 'No clean passes yet. A pass at or above the clean threshold shows up here.' }),
+    lineFigure('Accuracy per session (best pass)', series.accuracy.map((p) => p.value), series.info, { yMin: 0, yMax: 100 }),
+    lineFigure('Fastest clean tempo per session', series.cleanBpm.map((p) => p.value), series.info, { empty: 'No clean passes yet. A pass at or above the clean threshold shows up here.' }),
   ]);
 
   const withSpots = sessions.find((s) => (s.report?.problemSpots.length ?? 0) > 0);
@@ -171,9 +171,10 @@ export function renderLessonDetail(container: HTMLElement, lessonId: string, all
   container.replaceChildren(head, tiles, replayBest, charts, spots, sessionTable(sessions, handlers));
 }
 
-function lineFigure(title: string, values: (number | null)[], times: number[], options: { yMin?: number; yMax?: number; unit: string; empty?: string }): HTMLElement {
+function lineFigure(title: string, values: (number | null)[], info: readonly SessionPointInfo[], options: { yMin?: number; yMax?: number; empty?: string }): HTMLElement {
   const box: ChartBox = { width: 520, height: 200, left: 44, right: 14, top: 14, bottom: 28 };
-  const figure = node('figure', 'chart-figure', undefined, [node('figcaption', '', title)]);
+  const caption = node('figcaption', '', title);
+  const figure = node('figure', 'chart-figure', undefined, [caption]);
   if (!values.some((v) => v !== null)) {
     figure.append(node('p', 'hint chart-empty', options.empty ?? 'Nothing to chart yet.'));
     return figure;
@@ -185,18 +186,60 @@ function lineFigure(title: string, values: (number | null)[], times: number[], o
     root.append(svg('text', { x: box.left - 6, y: t.y + 4, class: 'axis', 'text-anchor': 'end' }, String(t.value)));
   }
   root.append(svg('path', { d: c.path, class: 'line' }));
+
+  // Hover or tap a point: that session's date, time, accuracy and BPM.
+  const tip = node('div', 'chart-tip');
+  tip.hidden = true;
+  let pinned: SVGElement | null = null;
+  const show = (dot: SVGElement, p: (typeof c.points)[number]) => {
+    const s = info[p.index]!;
+    tip.replaceChildren(
+      node('strong', '', formatDate(s.at, true)),
+      node('span', '', `${s.accuracy !== null ? formatPctShort(s.accuracy) : '—'} accuracy`),
+      node('span', '', `${s.bpm !== null ? bpmText(s.bpm) : '—'} BPM`),
+    );
+    tip.style.left = `${(p.x / box.width) * 100}%`;
+    tip.style.top = `${(p.y / box.height) * 100}%`;
+    // Keep it inside the chart near the edges.
+    tip.classList.toggle('flip', p.x > box.width * 0.75);
+    tip.classList.toggle('start', p.x < box.width * 0.25);
+    tip.hidden = false;
+    root.querySelectorAll('.dot.active').forEach((d) => d.classList.remove('active'));
+    dot.classList.add('active');
+  };
+  const hide = () => {
+    tip.hidden = true;
+    pinned = null;
+    root.querySelectorAll('.dot.active').forEach((d) => d.classList.remove('active'));
+  };
   for (const p of c.points) {
     const dot = svg('circle', { cx: p.x, cy: p.y, r: 4, class: 'dot' });
-    dot.append(svg('title', {}, `${formatDate(times[p.index]!, true)}: ${bpmText(p.value)}${options.unit}`));
-    root.append(dot);
+    // A bigger invisible target, so a point is easy to hover or tap.
+    const target = svg('circle', { cx: p.x, cy: p.y, r: 14, class: 'dot-target', tabindex: 0 });
+    target.dataset.index = String(p.index);
+    target.addEventListener('pointerenter', () => show(dot, p));
+    target.addEventListener('pointerleave', () => {
+      if (pinned !== target) hide();
+    });
+    target.addEventListener('focus', () => show(dot, p));
+    target.addEventListener('blur', hide);
+    target.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (pinned === target) return hide();
+      show(dot, p);
+      pinned = target;
+    });
+    root.append(dot, target);
   }
-  // Dates under the first and last session (and the middle one when there's room).
-  const labelled = values.length <= 2 ? values.map((_, i) => i) : [0, Math.floor((values.length - 1) / 2), values.length - 1];
-  for (const i of [...new Set(labelled)]) {
-    const anchor = values.length === 1 ? 'middle' : i === 0 ? 'start' : i === values.length - 1 ? 'end' : 'middle';
-    root.append(svg('text', { x: c.xs[i]!, y: box.height - 8, class: 'axis', 'text-anchor': anchor }, formatDate(times[i]!)));
+  root.addEventListener('click', hide);
+
+  // Dates when the sessions span several days, times when they're all on one (the day goes in the caption).
+  const axis = xAxisLabels(info.map((s) => s.at));
+  if (axis.day) caption.append(node('span', 'hint', ` · ${axis.day}`));
+  for (const l of axis.labels) {
+    root.append(svg('text', { x: c.xs[l.index]!, y: box.height - 8, class: 'axis', 'text-anchor': l.anchor }, l.text));
   }
-  figure.append(root as unknown as HTMLElement);
+  figure.append(node('div', 'chart-wrap', undefined, [root as unknown as HTMLElement, tip]));
   return figure;
 }
 

@@ -1,5 +1,6 @@
 import type { Hit } from '../input';
 import { grade } from './match';
+import { gradeSpan } from './span';
 import { summarize, type GradeSummary } from './summary';
 import {
   resolveConfig,
@@ -49,9 +50,9 @@ export interface LiveGraderOptions {
    * Notes more than this long before the miss deadline (now - window - grace) are settled: their
    * results are frozen and they leave the live regrade, so each hit only regrades the notes near
    * the current position, however long the song. Default 2000 ms. Infinity keeps everything live.
-   * The final summary, the coaching and saved history always come from the full grade (stop()
-   * batch-grades everything). Settling can only change live verdicts (colors, and the summary shown
-   * as each looped pass ends), and only for very sloppy playing.
+   * Summaries, the coaching and saved history always come from batch grades (stop() for a single
+   * run, gradeSpan() for each looped pass). Settling can only change live verdicts (colors), and
+   * only for very sloppy playing.
    */
   settleMs?: number;
 }
@@ -169,6 +170,14 @@ export class LiveGrader {
     if (this.settledNotes.length === 0 && this.settledExtras.length === 0) return this.current;
     const extras = [...this.settledExtras, ...this.current.extras].sort((a, b) => a.hit.time - b.hit.time);
     return { notes: [...this.settledNotes, ...this.current.notes], extras };
+  }
+
+  /**
+   * Exact batch grade of one span (a loop pass) from every note and hit received, unaffected by
+   * settling: see gradeSpan. Call it once the span's last note window has passed.
+   */
+  gradeSpan(fromTime: number, toTime: number, inSpan?: (note: ExpectedNote) => boolean): GradeResult {
+    return gradeSpan([...this.notesById.values()], this.allHits, fromTime, toTime, this.config, inSpan);
   }
 
   /** How many notes are in the live regrade (for tests and diagnostics). */
