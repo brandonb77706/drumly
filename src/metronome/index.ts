@@ -4,3 +4,5 @@ export { ClickScheduler, DEFAULT_SETTINGS } from './ClickScheduler';
 export type { MetronomeSettings } from './ClickScheduler';
 export * from './timing';
 export type { Ticker } from './ticker';
+export { CLICK_MODES, clickGain, isClickMode } from './clickMode';
+export type { ClickMode } from './clickMode';

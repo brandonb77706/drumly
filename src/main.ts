@@ -14,8 +14,21 @@ import {
 import { rockBeat } from './patterns';
 import { LiveGrader, DEFAULT_GRADING_CONFIG, summarize, type ExpectedNote, type GradeSummary, type HitVerdict } from './grading';
 import { GRADE_BARS, GRADE_BPM, GRADE_SCENARIOS, checkSummary, rockBeatNotes, type GradeScenario } from './gradeScenarios';
-import { Metronome, MAX_BPM, MIN_BPM, SUBDIVISIONS, type MetronomeClick, type Subdivision } from './metronome';
-import { STARTER_LESSONS, formatLessonText, lessonNoteSource, lessonToExpectedNotes, notePass, resultForPass, type Lesson } from './lessons';
+import { Metronome, MAX_BPM, MIN_BPM, SUBDIVISIONS, isClickMode, type ClickMode, type MetronomeClick, type Subdivision } from './metronome';
+import {
+  ALL_LESSONS,
+  SPEED_OPTIONS,
+  formatLessonText,
+  lessonBpmAt,
+  lessonNoteSource,
+  lessonToExpectedNotes,
+  noteId,
+  notePass,
+  resultForPass,
+  type Lesson,
+  type LessonCategory,
+} from './lessons';
+import { HighwayModel, HighwayRenderer } from './highway';
 import { PAD_LABELS, buildSummary, fmtPct, node } from './ui/summary';
 
 const LOG_SIZE = 30;
@@ -64,11 +77,15 @@ for (const pad of PADS) {
 }
 
 function flashPad(hit: Hit): void {
-  const flash = flashByPad.get(hit.pad);
+  flashTile(flashByPad.get(hit.pad), hit.velocity);
+}
+
+/** Flash a pad tile's overlay, brighter and longer for harder hits. */
+function flashTile(flash: HTMLElement | undefined, velocity: number): void {
   if (!flash) return;
-  const peak = 0.15 + 0.85 * (hit.velocity / 127);
+  const peak = 0.15 + 0.85 * (velocity / 127);
   flash.getAnimations().forEach((a) => a.cancel());
-  flash.animate([{ opacity: peak }, { opacity: 0 }], { duration: 120 + 230 * (hit.velocity / 127), easing: 'ease-out' });
+  flash.animate([{ opacity: peak }, { opacity: 0 }], { duration: 120 + 230 * (velocity / 127), easing: 'ease-out' });
 }
 
 const GRADE_COLORS = { good: '#3ddc84', ok: '#f5c542', bad: '#ff5c5c' } as const;
@@ -84,8 +101,9 @@ function flashGrade(pad: Pad, level: keyof typeof GRADE_COLORS): void {
   }
 }
 
-/** Pad chips in the lesson view (filled in when a lesson is selected). */
+/** Pad chips in the lesson view (filled in when a lesson is selected), and their flash overlays. */
 const lessonChipByPad = new Map<Pad, HTMLElement>();
+const lessonChipFlashByPad = new Map<Pad, HTMLElement>();
 
 // ---- Keyboard map ----------------------------------------------------------
 
@@ -281,7 +299,8 @@ toggleButton.addEventListener('click', () => {
 
 function setBpm(value: number): void {
   if (!Number.isFinite(value)) return;
-  const bpm = Math.round(Math.min(MAX_BPM, Math.max(MIN_BPM, value)));
+  // Not rounded: a 75% practice speed can be e.g. 63.75 BPM.
+  const bpm = Math.min(MAX_BPM, Math.max(MIN_BPM, value));
   metronome.setBpm(bpm);
   bpmRange.value = String(bpm);
   if (document.activeElement !== bpmNumber || Number(bpmNumber.value) !== bpm) bpmNumber.value = String(bpm);
@@ -363,6 +382,7 @@ function frame(now: number): void {
     if (currentClick.subdivision === 0) currentBeat = currentClick;
   }
 
+  const activeLesson = lessonRun ?? previewRun;
   if (currentClick && currentBeat) {
     const dots = renderDots(currentClick.beatsPerBar);
     const glow = Math.max(0, 1 - (now - currentBeat.time) / 180);
@@ -374,14 +394,15 @@ function frame(now: number): void {
     beatsEl.classList.toggle('countin', currentBeat.isCountIn);
     barLabelEl.textContent = currentBeat.isCountIn
       ? 'Count-in'
-      : lessonRun
-        ? `${lessonRun.loop ? `Pass ${Math.floor(currentBeat.bar / lessonRun.lesson.bars) + 1} · ` : ''}Bar ${(currentBeat.bar % lessonRun.lesson.bars) + 1} of ${lessonRun.lesson.bars}`
+      : activeLesson
+        ? `${activeLesson.loop ? `Pass ${Math.floor(currentBeat.bar / activeLesson.lesson.bars) + 1} · ` : ''}Bar ${(currentBeat.bar % activeLesson.lesson.bars) + 1} of ${activeLesson.lesson.bars}`
         : `Bar ${currentBeat.bar + 1}`;
   } else if (beatsEl.children.length === 0) {
     renderDots(metronome.getSettings().beatsPerBar);
   }
 
   lessonFrame(now);
+  highwayFrame(now);
 
   if (now - lastClockInfoUpdate > 500) {
     lastClockInfoUpdate = now;
@@ -628,8 +649,11 @@ function renderSummary(s: GradeSummary, scenario: GradeScenario | null): void {
 // ---- Lessons (main view) -------------------------------------------------------
 
 const lessonSelect = el<HTMLSelectElement>('lesson-select');
+const lessonSpeedSelect = el<HTMLSelectElement>('lesson-speed');
 const lessonBpmInput = el<HTMLInputElement>('lesson-bpm');
+const clickModeSelect = el<HTMLSelectElement>('click-mode');
 const lessonLoopInput = el<HTMLInputElement>('lesson-loop');
+const lessonPreviewButton = el<HTMLButtonElement>('lesson-preview');
 const lessonStartButton = el<HTMLButtonElement>('lesson-start');
 const lessonDescriptionEl = el('lesson-description');
 const lessonPatternEl = el('lesson-pattern');
@@ -642,6 +666,8 @@ const lessonSummaryEl = el('lesson-summary');
 
 /** Extra wait after a pass's last note before its summary is final enough to show (matches LiveGrader's miss grace). */
 const PASS_REPORT_GRACE_MS = 50;
+/** How long a preview keeps going after its last note. */
+const PREVIEW_TAIL_MS = 400;
 
 /** Best accuracy per lesson id, for this page session only. */
 const bestAccuracy = new Map<string, number>();
@@ -667,31 +693,138 @@ interface LessonRun {
   accuracies: number[];
 }
 
+/** Preview: the lesson plays once with the metronome, ungraded, flashing the pads on each note. */
+interface PreviewRun {
+  lesson: Lesson;
+  loop: false;
+  lastNoteId: string;
+  /** Set once the last note has reached the now line. */
+  endAt: number | null;
+}
+
 let lessonRun: LessonRun | null = null;
+let previewRun: PreviewRun | null = null;
 let cancelLesson: (() => void) | null = null;
 let lessonStarting = false;
 /** Bumped on every start/stop so a stale async startup can tell it was superseded. */
 let lessonGeneration = 0;
 
+// ---- Highway -------------------------------------------------------------------
+
+const highway = new HighwayRenderer(el<HTMLCanvasElement>('highway'), (pad) => PAD_LABELS[pad]);
+const IDLE_MESSAGE = 'Press Preview to see and hear it once, or Start to play.';
+
+/** What the highway shows. `frozenAt` holds the picture still after a run ends. */
+let highwayView: { model: HighwayModel; frozenAt: number | null } | null = null;
+
+function showHighway(model: HighwayModel, frozenAt: number | null): void {
+  highwayView = { model, frozenAt };
+  highway.setModel(model);
+}
+
+function freezeHighway(): void {
+  if (highwayView && highwayView.frozenAt === null) highwayView.frozenAt = performance.now();
+}
+
+const getGrid = (from: number, to: number) => metronome.getGrid(from, to);
+
+function flashPreviewNote(pad: Pad, accent: boolean): void {
+  const velocity = accent ? 127 : 95;
+  flashTile(flashByPad.get(pad), velocity);
+  flashTile(lessonChipFlashByPad.get(pad), velocity);
+}
+
+/** Called every animation frame. Drawing uses `now` directly; the grid is re-read only every ~200 ms. */
+function highwayFrame(now: number): void {
+  const view = highwayView;
+  if (view && view.frozenAt === null && metronome.isRunning) {
+    view.model.refresh(now, getGrid);
+    const preview = previewRun;
+    if (preview) {
+      view.model.takePassed(now, (note) => {
+        flashPreviewNote(note.pad, note.accent);
+        if (note.id === preview.lastNoteId) preview.endAt = note.time + PREVIEW_TAIL_MS;
+      });
+      if (preview.endAt !== null && now >= preview.endAt) stopLesson('Preview done. Press Start to play it.');
+    }
+  }
+  highway.draw(highwayView?.frozenAt ?? now);
+}
+
+// ---- Lesson controls -----------------------------------------------------------
+
+const CATEGORY_LABELS: Record<LessonCategory, string> = { beat: 'Beats', fill: 'Fills' };
+
 function selectedLesson(): Lesson {
-  return STARTER_LESSONS.find((l) => l.id === lessonSelect.value) ?? STARTER_LESSONS[0]!;
+  return ALL_LESSONS.find((l) => l.id === lessonSelect.value) ?? ALL_LESSONS[0]!;
 }
 
 function renderLessonPicker(): void {
-  const current = lessonSelect.value || STARTER_LESSONS[0]!.id;
-  lessonSelect.replaceChildren(
-    ...STARTER_LESSONS.map((l) => {
-      const best = bestAccuracy.get(l.id);
-      const option = node('option', '', best === undefined ? l.title : `${l.title} (best ${fmtPct(best)})`);
-      option.value = l.id;
-      return option;
-    }),
-  );
+  const current = lessonSelect.value || ALL_LESSONS[0]!.id;
+  const groups = (Object.keys(CATEGORY_LABELS) as LessonCategory[]).map((category) => {
+    const group = node('optgroup', '');
+    group.label = CATEGORY_LABELS[category];
+    group.append(
+      ...ALL_LESSONS.filter((l) => l.category === category).map((l) => {
+        const best = bestAccuracy.get(l.id);
+        const option = node('option', '', best === undefined ? l.title : `${l.title} (best ${fmtPct(best)})`);
+        option.value = l.id;
+        return option;
+      }),
+    );
+    return group;
+  });
+  lessonSelect.replaceChildren(...groups.filter((g) => g.children.length > 0));
   lessonSelect.value = current;
 }
 
+// Speed: a fraction of the lesson's default BPM.
+lessonSpeedSelect.replaceChildren(
+  ...SPEED_OPTIONS.map((speed) => {
+    const option = node('option', '', `${speed * 100}%`);
+    option.value = String(speed);
+    return option;
+  }),
+);
+lessonSpeedSelect.value = '1';
+
+function selectedSpeed(): number {
+  const v = Number(lessonSpeedSelect.value);
+  return Number.isFinite(v) && v > 0 ? v : 1;
+}
+
+function formatBpm(bpm: number): string {
+  return String(Number(bpm.toFixed(2)));
+}
+
+// Click mode: remembered for this page session only.
+const CLICK_MODE_KEY = 'drumly.clickMode';
+function loadClickMode(): ClickMode {
+  try {
+    const saved = sessionStorage.getItem(CLICK_MODE_KEY);
+    if (isClickMode(saved)) return saved;
+  } catch {
+    // storage unavailable: use the default
+  }
+  return 'on';
+}
+function setClickMode(mode: ClickMode): void {
+  metronome.setClickMode(mode);
+  clickModeSelect.value = mode;
+  try {
+    sessionStorage.setItem(CLICK_MODE_KEY, mode);
+  } catch {
+    // storage unavailable: the choice still applies until reload
+  }
+}
+setClickMode(loadClickMode());
+clickModeSelect.addEventListener('change', () => {
+  clickModeSelect.blur();
+  if (isClickMode(clickModeSelect.value)) setClickMode(clickModeSelect.value);
+});
+
 function showLesson(lesson: Lesson): void {
-  lessonBpmInput.value = String(lesson.defaultBpm);
+  lessonBpmInput.value = formatBpm(lessonBpmAt(lesson, selectedSpeed()));
   lessonDescriptionEl.textContent = `${lesson.description} ${lesson.bars} bars, ${lesson.beatsPerBar}/4, written in ${lesson.subdivision} notes.`;
   lessonPatternEl.textContent = formatLessonText(lesson);
 
@@ -701,10 +834,13 @@ function showLesson(lesson: Lesson): void {
     (lesson.equivalentPads?.length ? ' · any hi-hat sound counts' : '');
 
   lessonChipByPad.clear();
+  lessonChipFlashByPad.clear();
   lessonPadsEl.replaceChildren(
     ...pads.map((p) => {
-      const chip = node('span', 'lesson-pad', PAD_LABELS[p]);
+      const flash = node('div', 'flash');
+      const chip = node('span', 'lesson-pad', undefined, [flash, node('span', 'name', PAD_LABELS[p])]);
       lessonChipByPad.set(p, chip);
+      lessonChipFlashByPad.set(p, flash);
       return chip;
     }),
   );
@@ -712,38 +848,54 @@ function showLesson(lesson: Lesson): void {
   lessonSummaryEl.replaceChildren();
   lessonFeedbackEl.textContent = '';
   lessonFeedbackEl.className = 'lesson-feedback';
+  showHighway(new HighwayModel(lesson), null);
 }
 
 function updateLessonControls(): void {
-  const active = lessonRun !== null || lessonStarting;
+  const active = lessonRun !== null || previewRun !== null || lessonStarting;
   lessonStartButton.textContent = active ? 'Stop' : 'Start';
   lessonStartButton.classList.toggle('playing', active);
+  lessonPreviewButton.disabled = active;
   lessonSelect.disabled = active;
   lessonLoopInput.disabled = active;
+  highway.message = active ? '' : IDLE_MESSAGE;
 }
 
 function lessonBpm(lesson: Lesson): number {
-  const v = Math.round(Number(lessonBpmInput.value));
-  return Number.isFinite(v) && v >= MIN_BPM && v <= MAX_BPM ? v : lesson.defaultBpm;
+  const v = Number(lessonBpmInput.value);
+  return lessonBpmInput.value !== '' && Number.isFinite(v) && v >= MIN_BPM && v <= MAX_BPM ? v : lessonBpmAt(lesson, selectedSpeed());
+}
+
+/** Apply the BPM input; while a lesson plays, the tempo changes from the next beat and notes follow the clicks. */
+function commitLessonBpm(): void {
+  const bpm = lessonBpm(selectedLesson());
+  lessonBpmInput.value = formatBpm(bpm);
+  if (lessonRun || previewRun) setBpm(bpm);
 }
 
 lessonSelect.addEventListener('change', () => {
   lessonSelect.blur();
   showLesson(selectedLesson());
 });
+lessonSpeedSelect.addEventListener('change', () => {
+  lessonSpeedSelect.blur();
+  lessonBpmInput.value = formatBpm(lessonBpmAt(selectedLesson(), selectedSpeed()));
+  commitLessonBpm();
+});
 lessonBpmInput.addEventListener('change', () => {
-  const bpm = lessonBpm(selectedLesson());
-  lessonBpmInput.value = String(bpm);
   lessonBpmInput.blur();
-  // While a lesson is playing, the tempo changes from the next beat; notes follow the clicks.
-  if (lessonRun) setBpm(bpm);
+  commitLessonBpm();
 });
 lessonLoopInput.addEventListener('change', () => lessonLoopInput.blur());
 
 lessonStartButton.addEventListener('click', () => {
   lessonStartButton.blur();
-  if (lessonRun || lessonStarting) stopLesson('Stopped.');
-  else startLesson(selectedLesson(), lessonLoopInput.checked);
+  if (lessonRun || previewRun || lessonStarting) stopLesson('Stopped.');
+  else startLesson(selectedLesson(), lessonLoopInput.checked, 'play');
+});
+lessonPreviewButton.addEventListener('click', () => {
+  lessonPreviewButton.blur();
+  if (!lessonRun && !previewRun && !lessonStarting) startLesson(selectedLesson(), false, 'preview');
 });
 
 /** performance.now() time of the downbeat starting metronome bar `bar`, if it is in the grid. */
@@ -753,7 +905,7 @@ function barStartTime(bar: number, around: number, spanMs: number): number | nul
 }
 
 /** Must be called synchronously from a click handler: it starts audio. */
-function startLesson(lesson: Lesson, loop: boolean): void {
+function startLesson(lesson: Lesson, loop: boolean, mode: 'play' | 'preview'): void {
   if (metronome.isRunning) stopMetronome(); // also stops grade tests and test patterns
   applyMetronomeSettings({ bpm: lessonBpm(lesson), beatsPerBar: lesson.beatsPerBar, subdivision: lesson.subdivision, countIn: true });
   lessonStarting = true;
@@ -763,9 +915,25 @@ function startLesson(lesson: Lesson, loop: boolean): void {
   lessonFeedbackEl.textContent = '';
   lessonStatusEl.textContent = 'Starting…';
   lessonStatusEl.classList.add('running');
+  // The highway starts with the metronome, so the count-in is visible.
+  const model = new HighwayModel(lesson, { passes: loop ? Infinity : 1 });
+  showHighway(model, null);
   const starting = startMetronome();
   const generation = ++lessonGeneration;
   cancelLesson = () => stopLesson('Stopped.');
+
+  if (mode === 'preview') {
+    void (async () => {
+      await starting;
+      if (generation !== lessonGeneration) return;
+      if (!metronome.isRunning) return stopLesson('Could not start. Press Preview again.');
+      lessonStarting = false;
+      previewRun = { lesson, loop: false, lastNoteId: noteId(lesson.id, 0, lesson.notes.length - 1), endAt: null };
+      lessonStatusEl.textContent = 'Preview: watch and listen. Not graded.';
+      updateLessonControls();
+    })();
+    return;
+  }
 
   void (async () => {
     await starting;
@@ -780,7 +948,7 @@ function startLesson(lesson: Lesson, loop: boolean): void {
     const grader = new LiveGrader(
       manager,
       // Notes come straight from the metronome's click times, fetched as the grader needs them.
-      lessonNoteSource(lesson, (from, to) => metronome.getGrid(from, to), { passes: loop ? Infinity : 1 }),
+      lessonNoteSource(lesson, getGrid, { passes: loop ? Infinity : 1 }),
       {
         ignoreHitsBefore: downbeat - DEFAULT_GRADING_CONFIG.windowMs,
         ...(lesson.equivalentPads ? { config: { equivalentPads: lesson.equivalentPads } } : {}),
@@ -789,13 +957,16 @@ function startLesson(lesson: Lesson, loop: boolean): void {
     grader.onEvent((event) => {
       if (event.type === 'hit') {
         const v = event.verdict;
+        model.applyVerdict(event.hit, v);
         lessonFeedbackEl.textContent = `${PAD_LABELS[event.hit.pad]}: ${verdictText(v)}`;
         lessonFeedbackEl.className = `lesson-feedback ${verdictClass(v)}`;
         setGradeCell(event.hit, v);
         flashGrade(event.hit.pad, verdictLevel(v));
       } else if (event.type === 'revised') {
+        model.applyVerdict(event.hit, event.verdict);
         setGradeCell(event.hit, event.verdict);
       } else if (event.type === 'missed') {
+        model.markMissed(event.note);
         lessonFeedbackEl.textContent = `${PAD_LABELS[event.note.pad]}: missed`;
         lessonFeedbackEl.className = 'lesson-feedback g-missed';
         logMissed(event.note);
@@ -811,14 +982,20 @@ function startLesson(lesson: Lesson, loop: boolean): void {
   })();
 }
 
-/** Stop the current lesson run (if any) and the metronome. */
+/** Stop the current lesson run or preview (if any) and the metronome. */
 function stopLesson(message: string): void {
   lessonGeneration++;
   const run = lessonRun;
   lessonRun = null;
+  previewRun = null;
   lessonStarting = false;
   cancelLesson = null;
-  if (run) run.grader.stop();
+  freezeHighway();
+  if (run) {
+    const final = run.grader.stop();
+    // Show the final batch grade on the highway, so it agrees with the summary.
+    highwayView?.model.syncResults(final.results);
+  }
   if (metronome.isRunning) stopMetronome();
   lessonStatusEl.textContent = message;
   lessonStatusEl.classList.remove('running');
@@ -852,7 +1029,9 @@ function lessonFrame(now: number): void {
   // Pass k is over. Single run: final batch grade. Loop: this pass's slice of the live grade.
   let summary: GradeSummary;
   if (!run.loop) {
-    summary = run.grader.stop().summary;
+    const final = run.grader.stop();
+    highwayView?.model.syncResults(final.results);
+    summary = final.summary;
   } else {
     summary = summarize(resultForPass(run.grader.getResults(), k, passWin.start - windowMs, passWin.end - windowMs));
     run.passWindows.delete(k);
@@ -863,7 +1042,10 @@ function lessonFrame(now: number): void {
     console.warn(`Pass ${k + 1} of "${lesson.id}" graded ${summary.expected} notes, expected ${lesson.notes.length}.`);
   }
   showPassSummary(run, k, summary);
-  if (!run.loop) stopLesson('Done. Press Start to play it again.');
+  if (!run.loop) {
+    lessonRun = null; // already graded; stopLesson must not stop the grader again
+    stopLesson('Done. Press Start to play it again.');
+  }
 }
 
 function showPassSummary(run: LessonRun, pass: number, summary: GradeSummary): void {
@@ -895,5 +1077,5 @@ updateLessonControls();
 // Dev-server only: handles for poking at the app from the console or a browser test script.
 // Vite strips this from production builds (import.meta.env.DEV is false there).
 if (import.meta.env.DEV) {
-  Object.assign(window, { __drumly: { metronome, manager, TestSource, STARTER_LESSONS, lessonToExpectedNotes } });
+  Object.assign(window, { __drumly: { metronome, manager, TestSource, ALL_LESSONS, lessonToExpectedNotes, highwayView: () => highwayView } });
 }

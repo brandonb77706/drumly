@@ -14,10 +14,13 @@ export interface LessonNote {
   readonly accent?: boolean;
 }
 
+export type LessonCategory = 'beat' | 'fill';
+
 /** A lesson in musical terms, so it plays at any tempo. */
 export interface Lesson {
   readonly id: string;
   readonly title: string;
+  readonly category: LessonCategory;
   readonly description: string;
   readonly defaultBpm: number;
   readonly beatsPerBar: number;

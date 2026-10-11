@@ -1,6 +1,6 @@
 import { PADS, type Pad } from '../input';
 import { clicksPerBeat, type Subdivision } from '../metronome/timing';
-import type { Lesson, LessonNote } from './types';
+import type { Lesson, LessonCategory, LessonNote } from './types';
 
 /**
  * Short pad names for the lesson text format. Full pad names (e.g. "hihatClosed") also work.
@@ -114,6 +114,8 @@ export function parseLessonText(text: string, grid: LessonGrid): { notes: Lesson
 export interface LessonSpec {
   id: string;
   title: string;
+  /** Default 'beat'. */
+  category?: LessonCategory;
   description: string;
   defaultBpm: number;
   beatsPerBar: number;
@@ -133,6 +135,7 @@ export function lessonFromText(spec: LessonSpec): Lesson {
   return {
     id: spec.id,
     title: spec.title,
+    category: spec.category ?? 'beat',
     description: spec.description,
     defaultBpm: spec.defaultBpm,
     beatsPerBar: spec.beatsPerBar,

@@ -25,7 +25,7 @@ The kit is unavailable until about Oct 25, 2026. Until then, build and test with
 2. Web Audio metronome with clock alignment - DONE
 3. Comparison engine: match hits to expected notes, grade pad and timing - DONE
 4. First lessons (3 or 4 simple beats) graded live - DONE
-5. Note highway display
+5. Note highway display - DONE
 6. Fills as lessons with auto tempo increase
 7. Post-session analysis plus Claude API coaching (Jarvis voice optional)
 8. MIDI file import for songs with section looping
@@ -34,5 +34,6 @@ The kit is unavailable until about Oct 25, 2026. Until then, build and test with
 ## Working rules
 - Before coding a step, explain the design and the "why" briefly.
 - After building, run tests, typecheck, and build, and report honestly what passed, what failed, and what couldn't be tested without a browser or the kit.
+- Browser testing must be silent and must not use the user's own browser. Do not test in the connected browser (the Claude in Chrome extension or the user's open Chrome window), because sound plays out loud on the user's speakers. Always launch your own headless Chromium with Playwright or Puppeteer and the `--mute-audio` flag, for example `chromium.launch({ headless: true, args: ['--mute-audio'] })`. Muting only cuts sound output: Web Audio scheduling, click times, and grading behave exactly the same. If an existing test script launches a browser without it, fix that script.
 - Never add Claude (or any AI) as a commit author or co-author. No Co-Authored-By lines.
 - Finished step files are archived in `docs/steps/`. The current task is always in `NEXT_STEP.md`. When it's done, add a short "Result" section at the bottom of that file summarizing what was built, test results, and any open issues, so the reviewer can read it.

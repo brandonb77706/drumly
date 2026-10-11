@@ -1,4 +1,5 @@
 import { ClickScheduler, type MetronomeSettings } from './ClickScheduler';
+import { clickGain, type ClickMode } from './clickMode';
 import { createDefaultTicker, type Ticker } from './ticker';
 import {
   contextToPerformanceTime,
@@ -32,6 +33,8 @@ export interface MetronomeOptions extends Partial<MetronomeSettings> {
   volume?: number;
   /** Added to every click time, in ms. Default 0. */
   latencyOffsetMs?: number;
+  /** Default 'on'. */
+  clickMode?: ClickMode;
   /** For tests. Defaults to `new AudioContext({ latencyHint: 'interactive' })`. */
   createAudioContext?: () => AudioContext;
   /** For tests. Defaults to a Web Worker ticker. */
@@ -71,6 +74,7 @@ export class Metronome {
 
   private volume: number;
   private latencyOffsetMs: number;
+  private clickMode: ClickMode;
 
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
@@ -87,10 +91,11 @@ export class Metronome {
   private dropped = 0;
 
   constructor(options: MetronomeOptions = {}) {
-    const { volume, latencyOffsetMs, createAudioContext, createTicker, now, ...settings } = options;
+    const { volume, latencyOffsetMs, clickMode, createAudioContext, createTicker, now, ...settings } = options;
     this.scheduler = new ClickScheduler(settings);
     this.volume = clamp01(volume ?? 0.8);
     this.latencyOffsetMs = latencyOffsetMs ?? 0;
+    this.clickMode = clickMode ?? 'on';
     this.createAudioContext = createAudioContext ?? (() => new AudioContext({ latencyHint: 'interactive' }));
     this.createTicker = createTicker ?? createDefaultTicker;
     this.now = now ?? (() => performance.now());
@@ -197,8 +202,17 @@ export class Metronome {
     this.latencyOffsetMs = ms;
   }
 
-  getSettings(): MetronomeSettings & { volume: number; latencyOffsetMs: number } {
-    return { ...this.scheduler.getSettings(), volume: this.volume, latencyOffsetMs: this.latencyOffsetMs };
+  /**
+   * Which clicks are audible. Only changes each click's gain: scheduling, click times and
+   * onClick events are identical in every mode. Applies to clicks booked from now on, so a
+   * change can lag by up to the 100 ms lookahead.
+   */
+  setClickMode(mode: ClickMode): void {
+    this.clickMode = mode;
+  }
+
+  getSettings(): MetronomeSettings & { volume: number; latencyOffsetMs: number; clickMode: ClickMode } {
+    return { ...this.scheduler.getSettings(), volume: this.volume, latencyOffsetMs: this.latencyOffsetMs, clickMode: this.clickMode };
   }
 
   /** How click times are being mapped to performance.now(), for display and debugging. */
@@ -309,6 +323,7 @@ export class Metronome {
     if (!this.master) return;
     const sound = click.isAccent ? SOUNDS.accent : click.subdivision === 0 ? SOUNDS.beat : SOUNDS.subdivision;
     const t = click.time;
+    const level = sound.level * clickGain(this.clickMode, click.isCountIn);
 
     const osc = ctx.createOscillator();
     osc.type = 'sine';
@@ -316,7 +331,7 @@ export class Metronome {
 
     const envelope = ctx.createGain();
     envelope.gain.setValueAtTime(0, t);
-    envelope.gain.linearRampToValueAtTime(sound.level, t + CLICK_ATTACK_S);
+    envelope.gain.linearRampToValueAtTime(level, t + CLICK_ATTACK_S);
     envelope.gain.exponentialRampToValueAtTime(0.0001, t + CLICK_DECAY_S);
 
     osc.connect(envelope);

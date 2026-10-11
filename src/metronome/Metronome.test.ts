@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { Metronome, START_DELAY_S, type MetronomeClick } from './Metronome';
 import type { Ticker } from './ticker';
 import type { MetronomeSettings } from './ClickScheduler';
+import { clickGain, type ClickMode } from './clickMode';
+import { grade, summarize } from '../grading';
+import { lessonToExpectedNotes, STARTER_LESSONS } from '../lessons';
 
 /** performance.now() value when the fake AudioContext clock reads 0. */
 const PERF_AT_ZERO = 50_000;
@@ -9,10 +12,12 @@ const PERF_AT_ZERO = 50_000;
 const OUTPUT_LATENCY_MS = 20;
 
 function fakeAudioContext() {
+  /** Peak level of every click envelope, in scheduling order (only envelopes use linear ramps). */
+  const clickLevels: number[] = [];
   const param = () => ({
     value: 0,
     setValueAtTime: vi.fn(),
-    linearRampToValueAtTime: vi.fn(),
+    linearRampToValueAtTime: vi.fn((level: number) => clickLevels.push(level)),
     exponentialRampToValueAtTime: vi.fn(),
     setTargetAtTime: vi.fn(),
   });
@@ -38,7 +43,7 @@ function fakeAudioContext() {
       stop: vi.fn(),
     }),
   };
-  return { ctx, oscillatorStarts };
+  return { ctx, oscillatorStarts, clickLevels };
 }
 
 class ManualTicker implements Ticker {
@@ -56,8 +61,8 @@ class ManualTicker implements Ticker {
 }
 
 /** A metronome on a fake audio clock that we advance by hand. */
-async function rig(options: Partial<MetronomeSettings> & { latencyOffsetMs?: number } = {}) {
-  const { ctx, oscillatorStarts } = fakeAudioContext();
+async function rig(options: Partial<MetronomeSettings> & { latencyOffsetMs?: number; clickMode?: ClickMode } = {}) {
+  const { ctx, oscillatorStarts, clickLevels } = fakeAudioContext();
   const ticker = new ManualTicker();
   const metronome = new Metronome({
     ...options,
@@ -76,7 +81,7 @@ async function rig(options: Partial<MetronomeSettings> & { latencyOffsetMs?: num
       ticker.tick();
     }
   };
-  return { ctx, metronome, clicks, info, advance, oscillatorStarts };
+  return { ctx, metronome, clicks, info, advance, oscillatorStarts, clickLevels };
 }
 
 const heardAt = (contextTime: number) => PERF_AT_ZERO + contextTime * 1000 + OUTPUT_LATENCY_MS;
@@ -224,5 +229,73 @@ describe('Metronome', () => {
     ctx.currentTime += 0.025; // well under the 1 s refresh interval
     ticker.tick();
     expect(metronome.getClockInfo().source).toBe('outputTimestamp');
+  });
+});
+
+describe('click mode', () => {
+  const lesson = STARTER_LESSONS[1]!; // 8th-note rock beat
+  const settings = { bpm: lesson.defaultBpm, beatsPerBar: lesson.beatsPerBar, subdivision: lesson.subdivision, countIn: true };
+  /** Long enough for the count-in and both bars. */
+  const RUN_S = ((lesson.bars + 1) * lesson.beatsPerBar * 60) / lesson.defaultBpm + 0.5;
+
+  it('clickGain: on is always audible, muted never, count-in only during the count-in', () => {
+    expect([clickGain('on', true), clickGain('on', false)]).toEqual([1, 1]);
+    expect([clickGain('muted', true), clickGain('muted', false)]).toEqual([0, 0]);
+    expect([clickGain('countInOnly', true), clickGain('countInOnly', false)]).toEqual([1, 0]);
+  });
+
+  for (const mode of ['muted', 'countInOnly'] as const) {
+    it(`${mode}: clicks are scheduled at identical times and a perfect run still grades 100%`, async () => {
+      const on = await rig({ ...settings, clickMode: 'on' });
+      const quiet = await rig({ ...settings, clickMode: mode });
+      on.advance(RUN_S);
+      quiet.advance(RUN_S);
+
+      expect(quiet.clicks.length).toBeGreaterThan(4 + 16);
+      expect(quiet.oscillatorStarts).toEqual(on.oscillatorStarts);
+      expect(quiet.clicks.map((c) => [c.time, c.audioTime, c.bar, c.beat, c.subdivision])).toEqual(
+        on.clicks.map((c) => [c.time, c.audioTime, c.bar, c.beat, c.subdivision]),
+      );
+
+      // Grade against the quiet run's grid, with hits played exactly on the audible run's notes.
+      const quietNotes = lessonToExpectedNotes(lesson, quiet.clicks);
+      const played = lessonToExpectedNotes(lesson, on.clicks);
+      const hits = played.map((n) => ({ pad: n.pad, time: n.time, velocity: 100, source: 'test' as const }));
+      const summary = summarize(grade(quietNotes, hits, { equivalentPads: lesson.equivalentPads ?? [] }));
+      expect(summary).toMatchObject({ expected: lesson.notes.length, hit: lesson.notes.length, accuracy: 100 });
+    });
+  }
+
+  it('count-in only: count-in clicks are audible and every click after is at zero gain', async () => {
+    const { clicks, clickLevels, advance } = await rig({ ...settings, clickMode: 'countInOnly' });
+    advance(RUN_S);
+    expect(clickLevels).toHaveLength(clicks.length);
+    clicks.forEach((c, i) => {
+      if (c.isCountIn) expect(clickLevels[i]).toBeGreaterThan(0);
+      else expect(clickLevels[i]).toBe(0);
+    });
+    expect(clicks.filter((c) => c.isCountIn)).toHaveLength(4);
+  });
+
+  it('muted: every click is at zero gain; on: every click is audible', async () => {
+    const muted = await rig({ ...settings, clickMode: 'muted' });
+    const on = await rig({ ...settings, clickMode: 'on' });
+    muted.advance(RUN_S);
+    on.advance(RUN_S);
+    expect(muted.clickLevels.every((l) => l === 0)).toBe(true);
+    expect(on.clickLevels.every((l) => l > 0)).toBe(true);
+    expect(muted.clickLevels).toHaveLength(on.clickLevels.length);
+  });
+
+  it('setClickMode mid-run changes loudness only, from the next booked click', async () => {
+    const { metronome, clicks, clickLevels, advance } = await rig({ ...settings });
+    advance(1);
+    const before = clicks.length;
+    metronome.setClickMode('muted');
+    expect(metronome.getSettings().clickMode).toBe('muted');
+    advance(1);
+    expect(clickLevels.slice(0, before).every((l) => l > 0)).toBe(true);
+    expect(clickLevels.slice(before).every((l) => l === 0)).toBe(true);
+    expect(clicks.length).toBeGreaterThan(before);
   });
 });
