@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { formatMeanOffset, formatOffset, formatPctShort, formatSpread, formatTimingPhrase } from './format';
+import { formatMeanOffset, formatOffset, formatPctShort, formatSpread, formatTimingPhrase, passChipClass } from './format';
+import { passVerdict } from '../trainer/ladder';
 
 describe('formatOffset', () => {
   it('whole ms with a sign', () => {
@@ -48,5 +49,20 @@ describe('stat formats', () => {
     expect(formatPctShort(100)).toBe('100%');
     expect(formatPctShort(92.857)).toBe('92.9%');
     expect(formatPctShort(89.96)).toBe('90%');
+  });
+});
+
+describe('passChipClass', () => {
+  it('follows the ladder verdict, not which pass was best', () => {
+    const t = { passThreshold: 90 };
+    // The screenshot: passes 3 and 4 at 90% were clean, so they're green like the 100% ones.
+    expect([100, 100, 90, 90].map((a, i) => passChipClass(passVerdict(a, t), i === 0))).toEqual([
+      'pass-chip clean best',
+      'pass-chip clean',
+      'pass-chip clean',
+      'pass-chip clean',
+    ]);
+    expect(passChipClass(passVerdict(80, t), false)).toBe('pass-chip almost');
+    expect(passChipClass(passVerdict(50, t), true)).toBe('pass-chip rough best');
   });
 });

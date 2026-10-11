@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defaultLadderSettings, initialLadderState, ladderProgress, nextLadderState, type LadderSettings, type LadderState } from './ladder';
+import { defaultLadderSettings, initialLadderState, ladderProgress, nextLadderState, passVerdict, type LadderSettings, type LadderState } from './ladder';
 
 const settings: LadderSettings = { startBpm: 60, targetBpm: 70, stepBpm: 5, passThreshold: 90, passesNeeded: 2 };
 
@@ -84,5 +84,22 @@ describe('ladder', () => {
     const steps = run([95]);
     expect(ladderProgress(steps[0]!.state, settings)).toBe('60 → 70 BPM, 1 of 2 clean passes');
     expect(ladderProgress({ ...steps[0]!.state, done: true, bpm: 70 }, settings)).toBe('Fill learned at 70 BPM');
+  });
+});
+
+describe('passVerdict', () => {
+  it('matches the ladder: at the threshold is clean, below 70 is rough, in between is almost', () => {
+    expect(passVerdict(100, settings)).toBe('clean');
+    expect(passVerdict(90, settings)).toBe('clean');
+    expect(passVerdict(89.9, settings)).toBe('almost');
+    expect(passVerdict(70, settings)).toBe('almost');
+    expect(passVerdict(69.9, settings)).toBe('rough');
+    expect(passVerdict(null, settings)).toBe('rough');
+  });
+
+  it('a 90% pass at a 90% threshold is clean for both the ladder and the chip', () => {
+    const step = nextLadderState(initialLadderState(settings), { accuracy: 90 }, settings);
+    expect(step.state.cleanStreak).toBe(1);
+    expect(passVerdict(90, settings)).toBe('clean');
   });
 });

@@ -31,6 +31,9 @@ const COLORS = {
   focusEdge: 'rgba(127, 180, 255, 0.45)',
   focusLabel: '#7fb4ff',
   problemRing: '#ff5c8a',
+  listenLabel: '#7fb4ff',
+  playLabel: '#ff8a3d',
+  banner: 'rgba(17, 20, 26, 0.85)',
 } as const;
 
 const LANE_HEIGHT_CSS = 34;
@@ -57,6 +60,8 @@ export class HighwayRenderer {
   private cssHeight = 0;
   /** Shown when there are no notes on screen. */
   message = '';
+  /** Shown large in the top-right corner while set, e.g. "Listen" or "Your turn". */
+  banner: { text: string; tone: 'listen' | 'play' } | null = null;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -132,11 +137,25 @@ export class HighwayRenderer {
         ctx.fillStyle = COLORS.focusEdge;
         ctx.fillRect(x0, 0, 1, h);
         if (!Number.isNaN(region.end)) ctx.fillRect(x1 - 1, 0, 1, h);
-        ctx.font = SMALL_FONT;
+        // Right-aligned at the end, so it never sits on a turn label at the pass start.
+        if (!Number.isNaN(region.end)) {
+          ctx.font = SMALL_FONT;
+          ctx.textAlign = 'right';
+          ctx.textBaseline = 'middle';
+          ctx.fillStyle = COLORS.focusLabel;
+          ctx.fillText('graded', x1 - 4, lanesTop / 2 + 1);
+        }
+      }
+
+      // Turn labels ("Listen", "Your turn") at each pass's first downbeat.
+      for (const mark of model.turnMarks) {
+        const x = noteToX(mark.time, now, layout);
+        if (x > w || x < labelWidth - 200) continue;
+        ctx.font = FONT;
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
-        ctx.fillStyle = COLORS.focusLabel;
-        ctx.fillText('graded', x0 + 4, lanesTop / 2 + 1);
+        ctx.fillStyle = model.styleOf(mark.pass).outlined ? COLORS.listenLabel : COLORS.playLabel;
+        ctx.fillText(mark.label, Math.max(x + 4, labelWidth + 4), lanesTop / 2 + 1);
       }
 
       // Grid: bar lines bold, beat lines thin, count-in clicks as faint markers.
@@ -167,9 +186,16 @@ export class HighwayRenderer {
         visibleNotes++;
         const y = laneCenterY(note.lane, layout);
         const r = note.accent ? accentRadius : radius;
-        ctx.fillStyle = STATE_COLORS[note.state];
         ctx.beginPath();
         ctx.arc(x, y, r, 0, TAU);
+        if (note.outlined) {
+          // The app's turn: an outline, so it reads as "listen", not "play this".
+          ctx.strokeStyle = note.state === 'pending' ? COLORS.listenLabel : STATE_COLORS[note.state];
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          continue;
+        }
+        ctx.fillStyle = STATE_COLORS[note.state];
         ctx.fill();
         if (note.accent) {
           ctx.strokeStyle = COLORS.accentRing;
@@ -221,6 +247,19 @@ export class HighwayRenderer {
       ctx.font = SMALL_FONT;
       ctx.fillStyle = COLORS.muted;
       ctx.fillText('other', 10, laneCenterY(-1, layout));
+    }
+
+    if (this.banner) {
+      ctx.font = '700 15px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+      const text = this.banner.text;
+      const tw = ctx.measureText(text).width;
+      const bx = w - tw - 22;
+      ctx.fillStyle = COLORS.banner;
+      ctx.fillRect(bx - 8, lanesTop + 4, tw + 24, 24);
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = this.banner.tone === 'listen' ? COLORS.listenLabel : COLORS.playLabel;
+      ctx.fillText(text, bx + 4, lanesTop + 16);
     }
 
     if (visibleNotes === 0 && this.message) {

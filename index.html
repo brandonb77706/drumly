@@ -35,8 +35,22 @@
           </label>
           <label class="check"><input id="lesson-loop" type="checkbox" /> Loop</label>
           <label class="check" title="Loop, speeding up only once the fill is clean"><input id="lesson-trainer" type="checkbox" /> Trainer</label>
+          <label class="check" title="The app plays the fill, then you play it back, and so on until you press Stop"><input id="lesson-listen" type="checkbox" /> Listen, then play</label>
           <button id="lesson-preview" type="button">Preview</button>
           <button id="lesson-start" type="button" class="primary">Start</button>
+          <button id="lesson-delete" type="button" class="danger" hidden>Delete fill</button>
+        </div>
+        <div class="lesson-sound">
+          <label>Drums <input id="drums-volume" type="range" min="0" max="100" step="1" value="80" /></label>
+          <label>Click <input id="click-volume" type="range" min="0" max="100" step="1" value="80" /></label>
+          <label>Hit sounds
+            <select id="hit-sounds">
+              <option value="keyboard">Keyboard only</option>
+              <option value="all">Keyboard and MIDI</option>
+              <option value="off">Off</option>
+            </select>
+          </label>
+          <label class="check" title="Play the correct drums quietly while you play. Grading is unchanged."><input id="guide-drums" type="checkbox" /> Guide drums</label>
         </div>
         <div id="trainer-settings" class="trainer-settings" hidden>
           <label>Start BPM <input id="trainer-start" type="number" min="30" max="300" step="1" /></label>
@@ -45,6 +59,40 @@
           <label>Clean pass (%) <input id="trainer-threshold" type="number" min="1" max="100" step="1" value="90" /></label>
           <label>Clean passes needed <input id="trainer-passes" type="number" min="1" max="10" step="1" value="2" /></label>
         </div>
+        <details id="record-panel" class="record">
+          <summary>Record a fill</summary>
+          <p class="hint">Heard a fill in a video? Play it in against the click. It snaps to the grid, you fix the text if needed, then save it and learn it with the Trainer.</p>
+          <div class="record-controls">
+            <label>Bars
+              <select id="record-bars">
+                <option value="1">1</option>
+                <option value="2" selected>2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+              </select>
+            </label>
+            <label>BPM <input id="record-bpm" type="number" min="30" max="300" step="1" value="70" /></label>
+            <label>Grid
+              <select id="record-grid">
+                <option value="sixteenth">16ths</option>
+                <option value="triplet">Triplets</option>
+              </select>
+            </label>
+            <button id="record-start" type="button" class="primary">Record</button>
+          </div>
+          <p id="record-status" class="grade-status"></p>
+          <div id="record-result" class="record-result" hidden>
+            <label class="record-text-label">The fill as text (edit to fix it)
+              <textarea id="record-text" rows="6" spellcheck="false"></textarea>
+            </label>
+            <p id="record-error" class="record-error"></p>
+            <div class="record-controls">
+              <label>Name <input id="record-title" type="text" maxlength="60" placeholder="My fill" /></label>
+              <button id="record-play" type="button">Play it back</button>
+              <button id="record-save" type="button" class="primary">Save as lesson</button>
+            </div>
+          </div>
+        </details>
         <p id="lesson-description" class="lesson-description"></p>
         <div id="trainer-status" class="trainer-status" hidden>
           <span id="trainer-bpm" class="trainer-bpm"></span>
@@ -62,6 +110,14 @@
         <p id="lesson-status" class="grade-status"></p>
         <p id="lesson-feedback" class="lesson-feedback"></p>
         <div id="lesson-history" class="lesson-history"></div>
+        <div id="compare-bar" class="compare-bar" hidden>
+          <button id="compare-play" type="button">Compare</button>
+          <select id="compare-mode" aria-label="Compare mode">
+            <option value="sequential">Correct, then yours</option>
+            <option value="together">Both at once (correct left, yours right)</option>
+          </select>
+          <span id="compare-info" class="hint"></span>
+        </div>
         <div id="problem-spots" class="problem-spots" hidden>
           <h3>Problem spots</h3>
           <ol id="problem-list"></ol>

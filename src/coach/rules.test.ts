@@ -15,7 +15,7 @@ function base(): SessionReport {
     graded: 'fill',
     accuracy: { overall: 85, start: 85, end: 85, trend: 'flat', perPass: [60, 60, 60, 60].map((bpm) => ({ bpm, accuracy: 85 })) },
     timing: { meanMs: 0, spreadMs: 18, tendency: 'on time' },
-    fill: { accuracy: 85, meanMs: 0, spreadMs: 18, tendency: 'on time', count: '3 e and a', beats: 'beats 3 and 4', firstPad: 'Snare' },
+    fill: { accuracy: 85, meanMs: 0, spreadMs: 18, tendency: 'on time', count: '3 e and a', beats: 'beats 3 and 4', bar: 2, firstPad: 'Snare' },
     groove: { accuracy: 100, meanMs: 0, spreadMs: 5, tendency: 'on time' },
     perPad: [],
     problemSpots: [],
@@ -23,7 +23,7 @@ function base(): SessionReport {
 }
 
 function spot(over: Partial<ProblemSpotReport>): ProblemSpotReport {
-  return { pad: 'Tom 2', where: "the 'e' of beat 4 (bar 2)", passes: 4, offPasses: 3, missed: 0, wrongPad: 0, early: 0, late: 0, meanMs: 0, playedInstead: null, ...over };
+  return { pad: 'Tom 2', where: "the 'e' of beat 4 (bar 2)", bar: 2, beat: 4, passes: 4, offPasses: 3, missed: 0, wrongPad: 0, early: 0, late: 0, meanMs: 0, playedInstead: null, ...over };
 }
 
 describe('ruleBasedCoaching', () => {
@@ -54,7 +54,7 @@ describe('ruleBasedCoaching', () => {
     r.problemSpots = [spot({ wrongPad: 3, playedInstead: 'Tom 3' })];
     const c = ruleBasedCoaching(r);
     expect(c.fixThis[0]).toBe("Tom 2 on the 'e' of beat 4 (bar 2) keeps landing on Tom 3. Play just beats 3 and 4 slowly until your hand finds Tom 2.");
-    expect(c.nextExercise).toBe('Loop just beats 3 and 4 at 50 BPM until Tom 2 is right 5 times in a row, then play the whole thing again.');
+    expect(c.nextExercise).toBe('Loop just beats 3 and 4 of bar 2 at 50 BPM until Tom 2 is clean 3 times in a row, then try the full fill.');
   });
 
   it('a single wrong pad is not enough', () => {
@@ -102,7 +102,61 @@ describe('ruleBasedCoaching', () => {
     const c = ruleBasedCoaching(r);
     expect(c.headline).toBe('Fill learned at 70 BPM. Nice work.');
     expect(c.nextExercise).toBe('Move on to "Full-bar tom run". Start it in the Trainer and let it bring you up to speed.');
-    expect(c.wentWell.slice(0, 3)).toEqual(['You learned it at 70 BPM.', 'You climbed from 60 to 70 BPM.', 'Right drums, right place: 100% on the fill.']);
+    expect(c.wentWell.slice(0, 2)).toEqual(['You climbed from 60 to 70 BPM.', 'Right drums, right place: 100% on the fill.']);
+  });
+
+  it('fill learned with a problem spot: drill the spot first, soften the headline', () => {
+    // The screenshot's session: learned at 65, but Tom 2 keeps landing on Tom 3.
+    const r = base();
+    r.trainer = { startBpm: 60, targetBpm: 65, finalBpm: 65, learned: true };
+    r.bpm = { min: 60, max: 65 };
+    r.accuracy.perPass = [60, 60, 65, 65].map((bpm) => ({ bpm, accuracy: 95 }));
+    r.problemSpots = [spot({ wrongPad: 2, playedInstead: 'Tom 3' })];
+    const c = ruleBasedCoaching(r);
+    expect(c.headline).toBe('Fill learned at 65 BPM. One spot to clean up.');
+    expect(c.nextExercise).toBe('Loop just beats 3 and 4 of bar 2 at 55 BPM until Tom 2 is clean 3 times in a row, then try the full fill.');
+    expect(c.nextExercise).not.toContain('Full-bar tom run');
+    expect(c.fixThis[0]).toContain('keeps landing on Tom 3');
+
+    r.problemSpots.push(spot({ pad: 'Tom 3', where: "the 'a' of beat 4 (bar 2)", missed: 2 }));
+    expect(ruleBasedCoaching(r).headline).toBe('Fill learned at 65 BPM. Two spots to clean up.');
+  });
+
+  it('a problem spot on the landing drills into the next downbeat', () => {
+    const r = base();
+    r.problemSpots = [spot({ pad: 'Crash', where: 'beat 1 (bar 3)', bar: 3, beat: 1, missed: 2 })];
+    expect(ruleBasedCoaching(r).nextExercise).toBe('Loop beats 3 and 4 of bar 2 into the 1 of bar 3 at 50 BPM until Crash is clean 3 times in a row, then try the full fill.');
+  });
+
+  it('a problem spot outranks the other fixes for the next exercise', () => {
+    const r = base();
+    r.fill = { ...r.fill!, meanMs: -30 };
+    r.problemSpots = [spot({ late: 3, meanMs: 25 })];
+    const c = ruleBasedCoaching(r);
+    expect(c.fixThis[0]).toContain('rushing');
+    expect(c.nextExercise).toContain('until Tom 2 is clean 3 times in a row');
+  });
+
+  it('went-well items never repeat the headline', () => {
+    const cases: SessionReport[] = [];
+    const learned = base();
+    learned.trainer = { startBpm: 60, targetBpm: 70, finalBpm: 70, learned: true };
+    learned.bpm = { min: 60, max: 70 };
+    learned.accuracy.overall = 100;
+    cases.push(learned);
+    const learnedWithSpot = structuredClone(learned);
+    learnedWithSpot.problemSpots = [spot({ wrongPad: 2, playedInstead: 'Tom 3' })];
+    cases.push(learnedWithSpot, base());
+    for (const r of cases) {
+      const c = ruleBasedCoaching(r);
+      for (const item of c.wentWell) {
+        expect(item).not.toMatch(/learn/i);
+        expect(c.headline).not.toContain(item);
+        // No item states the headline's own claim (e.g. "at 70 BPM").
+        const claim = /at (\d+(?:\.\d+)?) BPM/.exec(c.headline)?.[0];
+        if (claim) expect(item).not.toContain(claim);
+      }
+    }
   });
 
   it('the last fill learned: push the target up', () => {

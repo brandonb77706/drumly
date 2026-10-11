@@ -54,6 +54,9 @@ export interface ProblemSpotReport {
   pad: string;
   /** E.g. "the 'e' of beat 4 (bar 2)". */
   where: string;
+  /** 1-based bar and beat of the note, as counted. */
+  bar: number;
+  beat: number;
   /** Passes this note was graded in, and how often it was off. */
   passes: number;
   offPasses: number;
@@ -100,6 +103,8 @@ export interface SessionReport {
     count: string;
     /** E.g. "beats 3 and 4". */
     beats: string;
+    /** 1-based bar the fill starts in. */
+    bar: number;
     /** The first drum of the fill, e.g. "Snare". */
     firstPad: string;
   }) | null;
@@ -120,11 +125,13 @@ export interface Coaching {
 export type CoachSource = 'claude' | 'rules';
 
 /** Why the Claude coach wasn't used. */
-export type FallbackReason = 'no-key' | 'timeout' | 'invalid-response' | 'api-error' | 'unreachable';
+export type FallbackReason = 'no-key' | 'timeout' | 'invalid-response' | 'api-rejected' | 'bad-key' | 'api-error' | 'unreachable';
 
 export interface CoachResponse {
   source: CoachSource;
   coaching: Coaching;
   /** Set when source is 'rules' because the Claude coach was asked for but couldn't answer. */
   reason?: FallbackReason;
+  /** The API's own error message, for 'api-rejected' and 'bad-key'. */
+  detail?: string;
 }

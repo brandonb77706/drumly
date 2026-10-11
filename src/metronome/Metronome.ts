@@ -164,6 +164,16 @@ export class Metronome {
     return this.running;
   }
 
+  /**
+   * The metronome's AudioContext, created if needed, so other sounds (the drums) share its clock.
+   * Call from a user gesture the first time: a suspended context is resumed here.
+   */
+  getAudioContext(): AudioContext {
+    const ctx = this.ensureContext();
+    if (ctx.state === 'suspended') void ctx.resume().catch(() => {});
+    return ctx;
+  }
+
   // ---- settings ------------------------------------------------------------
 
   /** 30..300. While playing, takes effect from the next beat. */

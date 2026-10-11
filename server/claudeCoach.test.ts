@@ -4,7 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FILL_LESSONS } from '../src/lessons';
 import { buildSessionReport, ruleBasedCoaching } from '../src/coach';
 import { scriptedPass } from '../src/coach/testSessions';
-import { coachReport, DEFAULT_COACH_MODEL, SYSTEM_PROMPT } from './claudeCoach';
+import { APIError } from '@anthropic-ai/sdk';
+import { apiFailureReason, coachReport, DEFAULT_COACH_MODEL, SYSTEM_PROMPT } from './claudeCoach';
 import { COACH_ENDPOINT } from '../src/coach';
 import { COACH_ROUTE } from './coachPlugin';
 import { handleCoach } from './coachRoute';
@@ -16,6 +17,7 @@ vi.mock('@anthropic-ai/sdk', async (importOriginal) => {
   class FakeAnthropic {
     static APIConnectionTimeoutError = actual.default.APIConnectionTimeoutError;
     static APIUserAbortError = actual.default.APIUserAbortError;
+    static APIError = actual.default.APIError;
     messages = { create: sdk.create };
     constructor(options: unknown) {
       sdk.constructed.push(options);
@@ -110,9 +112,38 @@ describe('coachReport', () => {
 
   it('an API error falls back to rules', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    sdk.create.mockRejectedValue(new Error('401 invalid x-api-key'));
-    expect(await coachReport(report, { apiKey: 'k' })).toMatchObject({ source: 'rules', reason: 'api-error' });
+    sdk.create.mockRejectedValue(new Error('socket hang up'));
+    const res = await coachReport(report, { apiKey: 'k' });
+    expect(res).toMatchObject({ source: 'rules', reason: 'api-error' });
+    expect(res.detail).toBeUndefined();
     warn.mockRestore();
+  });
+
+  it('a rejected request (a parameter) and a rejected key are told apart, with the API message logged and passed on', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const message = 'output_config.effort: Extra inputs are not permitted';
+    sdk.create.mockRejectedValueOnce(APIError.generate(400, { error: { type: 'invalid_request_error', message } }, undefined, new Headers()));
+    const rejected = await coachReport(report, { apiKey: 'k' });
+    expect(rejected).toMatchObject({ source: 'rules', reason: 'api-rejected' });
+    expect(rejected.detail).toContain(message);
+    expect(String(warn.mock.calls[0]![0])).toContain('HTTP 400');
+    expect(String(warn.mock.calls[0]![0])).toContain(message);
+
+    sdk.create.mockRejectedValueOnce(APIError.generate(401, { error: { type: 'authentication_error', message: 'invalid x-api-key' } }, undefined, new Headers()));
+    expect(await coachReport(report, { apiKey: 'k' })).toMatchObject({ source: 'rules', reason: 'bad-key' });
+    warn.mockRestore();
+  });
+
+  it('sorts HTTP statuses by what the user has to fix', () => {
+    expect([400, 404, 422].map(apiFailureReason)).toEqual(['api-rejected', 'api-rejected', 'api-rejected']);
+    expect([401, 403].map(apiFailureReason)).toEqual(['bad-key', 'bad-key']);
+    expect([429, 500, 529, undefined].map(apiFailureReason)).toEqual(['api-error', 'api-error', 'api-error', 'api-error']);
+  });
+
+  it('the system prompt carries the problem-spot and no-repeat rules', () => {
+    expect(SYSTEM_PROMPT).toContain('If problemSpots is not empty, it must drill the worst one');
+    expect(SYSTEM_PROMPT).toContain('Only suggest moving on to lesson.next when problemSpots is empty');
+    expect(SYSTEM_PROMPT).toContain('Never repeat what the headline already says');
   });
 });
 

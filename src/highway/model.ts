@@ -1,6 +1,6 @@
 import type { Hit, Pad } from '../input';
 import type { ExpectedNote, GradeResult, HitVerdict, TimingGrade } from '../grading';
-import { lessonToExpectedNotes, noteIndex, type ClickTime, type Lesson, type LessonPosition } from '../lessons';
+import { lessonToExpectedNotes, noteIndex, notePass, type ClickTime, type Lesson, type LessonPosition } from '../lessons';
 import { lanesForLesson, laneForPad } from './layout';
 
 /** What a note on the highway currently shows. */
@@ -22,6 +22,21 @@ export interface HighwayNote {
   missedReported: boolean;
   /** Set once the note has crossed the now line (see takePassed). */
   passed: boolean;
+  /** Drawn outlined: a pass the app plays (a "Listen" turn, or the correct side of a replay). */
+  readonly outlined: boolean;
+}
+
+/** How one pass is drawn: a label at its first downbeat, and whether its notes are outlined. */
+export interface PassStyle {
+  readonly label: string | null;
+  readonly outlined: boolean;
+}
+
+/** A pass label ("Listen", "Your turn") at the pass's first downbeat. */
+export interface TurnMark {
+  readonly pass: number;
+  readonly label: string;
+  time: number;
 }
 
 export type GridLineKind = 'bar' | 'beat' | 'countIn';
@@ -71,7 +86,13 @@ export interface HighwayModelOptions {
   futureMs?: number;
   /** Minimum time between grid reads, ms. Default 200. */
   refreshMs?: number;
+  /** Lanes to show instead of the lesson's own pads (e.g. a full kit while recording). */
+  lanes?: readonly Pad[];
+  /** Per-pass style. Default: no label, filled notes. Outlined passes get no focus shading (they aren't graded). */
+  passStyle?: (pass: number) => PassStyle;
 }
+
+const PLAIN: PassStyle = { label: null, outlined: false };
 
 /**
  * Everything the highway draws, as plain mutable records allocated once per note/hit, so the
@@ -90,6 +111,8 @@ export class HighwayModel {
   readonly ticks: HitTick[] = [];
   /** In pass order. */
   readonly focusRegions: FocusRegion[] = [];
+  /** In pass order. */
+  readonly turnMarks: TurnMark[] = [];
   /** Becomes true once a hit lands on a pad with no lane; the "other" lane is shown from then on. */
   hasOtherLane = false;
 
@@ -103,6 +126,8 @@ export class HighwayModel {
   /** Which note each hit was last matched to. */
   private readonly noteByHit = new Map<Hit, HighwayNote>();
   private readonly regionByPass = new Map<number, FocusRegion>();
+  private readonly markByPass = new Map<number, TurnMark>();
+  private readonly passStyle: (pass: number) => PassStyle;
   private highlighted: ReadonlySet<number> = new Set();
   private lastRefresh = -Infinity;
   private keepFrom = -Infinity;
@@ -111,7 +136,8 @@ export class HighwayModel {
     readonly lesson: Lesson,
     options: HighwayModelOptions = {},
   ) {
-    this.lanes = lanesForLesson(lesson);
+    this.lanes = options.lanes ? [...options.lanes] : lanesForLesson(lesson);
+    this.passStyle = options.passStyle ?? (() => PLAIN);
     this.passes = options.passes ?? 1;
     this.pastMs = options.pastMs ?? 3000;
     this.futureMs = options.futureMs ?? 2600;
@@ -144,6 +170,7 @@ export class HighwayModel {
       }
     }
     this.updateFocusRegions(clicks);
+    this.updateTurnMarks(clicks);
     for (const expected of lessonToExpectedNotes(this.lesson, clicks, { passes: this.passes })) {
       const note = this.noteById.get(expected.id);
       if (note) note.time = expected.time;
@@ -239,8 +266,14 @@ export class HighwayModel {
     }
   }
 
+  /** The style of the pass a note id belongs to. */
+  styleOf(pass: number): PassStyle {
+    return this.passStyle(pass);
+  }
+
   private addNote(expected: ExpectedNote): HighwayNote {
     const note: HighwayNote = {
+      outlined: this.passStyle(notePass(expected.id) ?? 0).outlined,
       id: expected.id,
       lessonIndex: noteIndex(expected.id) ?? -1,
       pad: expected.pad,
@@ -265,7 +298,7 @@ export class HighwayModel {
     clicks.forEach((click, i) => {
       if (click.isCountIn || click.bar < 0) return;
       const pass = Math.floor(click.bar / bars);
-      if (pass >= this.passes) return;
+      if (pass >= this.passes || this.passStyle(pass).outlined) return;
       const position = { bar: click.bar % bars, beat: click.beat, subdivision: click.subdivision };
       const isStart = samePosition(position, focus.start);
       const isEnd = samePosition(position, focus.end);
@@ -286,8 +319,31 @@ export class HighwayModel {
     });
   }
 
+  /** A label at the first downbeat of each pass whose style has one. */
+  private updateTurnMarks(clicks: readonly HighwayClick[]): void {
+    const bars = this.lesson.bars;
+    for (const click of clicks) {
+      if (click.isCountIn || click.bar < 0 || click.bar % bars !== 0 || click.beat !== 0 || click.subdivision !== 0) continue;
+      const pass = click.bar / bars;
+      if (pass >= this.passes) continue;
+      const mark = this.markByPass.get(pass);
+      if (mark) {
+        mark.time = click.time;
+        continue;
+      }
+      const label = this.passStyle(pass).label;
+      if (label === null) continue;
+      const created: TurnMark = { pass, label, time: click.time };
+      this.markByPass.set(pass, created);
+      this.turnMarks.push(created);
+      this.turnMarks.sort((a, b) => a.pass - b.pass);
+    }
+  }
+
   private prune(): void {
     const keepFrom = this.keepFrom;
+    // A label stays while its pass is on screen: drop it once the next one has scrolled past too.
+    removeWhere(this.turnMarks, (m) => (this.markByPass.get(m.pass + 1)?.time ?? Infinity) < keepFrom, (m) => this.markByPass.delete(m.pass));
     removeWhere(this.focusRegions, (r) => r.end < keepFrom, (r) => this.regionByPass.delete(r.pass));
     removeWhere(this.notes, (n) => n.time < keepFrom, (n) => this.noteById.delete(n.id));
     removeWhere(this.lines, (l) => l.time < keepFrom, (l) => this.lineByIndex.delete(l.index));

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FILL_LESSONS } from '../lessons';
-import { fallbackNote, requestCoaching } from './client';
+import { fallbackLabel, fallbackNote, requestCoaching } from './client';
 import { buildSessionReport } from './report';
 import { ruleBasedCoaching } from './rules';
 import { scriptedPass } from './testSessions';
@@ -34,8 +34,16 @@ describe('requestCoaching', () => {
     expect(await requestCoaching(report, hang, 30)).toMatchObject({ source: 'rules', reason: 'timeout' });
   });
 
+  it('passes the API error detail through for a rejected request', async () => {
+    const body = { source: 'rules', coaching: rules, reason: 'api-rejected', detail: ' 400 bad param ' };
+    expect(await requestCoaching(report, fakeFetch(() => json(body)))).toEqual({ source: 'rules', coaching: rules, reason: 'api-rejected', detail: '400 bad param' });
+  });
+
   it('explains each fallback in plain words', () => {
     expect(fallbackNote('no-key')).toContain('ANTHROPIC_API_KEY');
     expect(fallbackNote(undefined)).toBe('');
+    expect(fallbackLabel('api-rejected')).toBe('Claude coach unavailable: API rejected the request. See server console.');
+    expect(fallbackLabel('bad-key')).toContain('key');
+    expect(fallbackLabel('api-rejected')).not.toBe(fallbackLabel('bad-key'));
   });
 });

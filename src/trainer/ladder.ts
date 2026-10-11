@@ -50,6 +50,15 @@ export interface LadderStep {
   message: string;
 }
 
+/** How the ladder judges one pass: clean counts toward a speed-up, rough toward a slow-down. */
+export type PassVerdict = 'clean' | 'almost' | 'rough';
+
+export function passVerdict(accuracy: number | null, settings: Pick<LadderSettings, 'passThreshold'>): PassVerdict {
+  const a = accuracy ?? 0;
+  if (a >= settings.passThreshold) return 'clean';
+  return a < SLOW_DOWN_BELOW ? 'rough' : 'almost';
+}
+
 export function initialLadderState(settings: LadderSettings): LadderState {
   return { bpm: Math.min(settings.startBpm, settings.targetBpm), cleanStreak: 0, badStreak: 0, passes: 0, done: false };
 }
@@ -62,11 +71,11 @@ export function initialLadderState(settings: LadderSettings): LadderState {
  */
 export function nextLadderState(state: LadderState, pass: { accuracy: number | null }, settings: LadderSettings): LadderStep {
   if (state.done) return { state, change: 'none', message: `Fill learned at ${fmt(state.bpm)} BPM` };
-  const accuracy = pass.accuracy ?? 0;
+  const verdict = passVerdict(pass.accuracy, settings);
   const passes = state.passes + 1;
   const floor = Math.min(settings.startBpm, settings.targetBpm);
 
-  if (accuracy >= settings.passThreshold) {
+  if (verdict === 'clean') {
     const cleanStreak = state.cleanStreak + 1;
     if (cleanStreak < settings.passesNeeded) {
       return {
@@ -82,7 +91,7 @@ export function nextLadderState(state: LadderState, pass: { accuracy: number | n
     return { state: { bpm, cleanStreak: 0, badStreak: 0, passes, done: false }, change: 'speedUp', message: `Clean! Speeding up to ${fmt(bpm)} BPM` };
   }
 
-  if (accuracy < SLOW_DOWN_BELOW) {
+  if (verdict === 'rough') {
     const badStreak = state.badStreak + 1;
     if (badStreak < SLOW_DOWN_AFTER) {
       return { state: { ...state, cleanStreak: 0, badStreak, passes }, change: 'none', message: 'Rough pass. Keep going.' };

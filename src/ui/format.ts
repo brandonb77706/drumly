@@ -33,3 +33,12 @@ export function formatPctShort(v: number | null): string {
   const fixed = Number(v.toFixed(1));
   return `${fixed}%`;
 }
+
+/**
+ * CSS classes for a pass chip. The color is the ladder's own verdict (green clean, gray almost,
+ * red rough), so a pass the trainer counted as clean never looks like a failed one. The session
+ * best is marked separately and doesn't change the color.
+ */
+export function passChipClass(verdict: 'clean' | 'almost' | 'rough', isBest: boolean): string {
+  return `pass-chip ${verdict}${isBest ? ' best' : ''}`;
+}

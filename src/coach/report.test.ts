@@ -55,7 +55,7 @@ describe('buildSessionReport', () => {
       passes: [0, 1, 2].map((p) => scriptedPass(toms, p, 70, (i) => (fill.has(i) ? { offset: -20 } : undefined))),
     };
     const r = buildSessionReport(session);
-    expect(r.fill).toEqual({ accuracy: 100, meanMs: -20, spreadMs: 0, tendency: 'rushing', count: '3 e and a', beats: 'beats 3 and 4', firstPad: 'Snare' });
+    expect(r.fill).toEqual({ accuracy: 100, meanMs: -20, spreadMs: 0, tendency: 'rushing', count: '3 e and a', beats: 'beats 3 and 4', bar: 2, firstPad: 'Snare' });
     expect(r.groove).toEqual({ accuracy: 100, meanMs: 0, spreadMs: 0, tendency: 'on time' });
     // 20 ms early is "perfect" at the threshold, so not a problem spot; the tendency still shows.
     expect(r.problemSpots).toEqual([]);
@@ -69,7 +69,7 @@ describe('buildSessionReport', () => {
     };
     const r = buildSessionReport(session);
     expect(r.problemSpots).toEqual([
-      { pad: 'Tom 2', where: "the 'e' of beat 4 (bar 2)", passes: 4, offPasses: 3, missed: 0, wrongPad: 3, early: 0, late: 0, meanMs: 4, playedInstead: 'Tom 3' },
+      { pad: 'Tom 2', where: "the 'e' of beat 4 (bar 2)", bar: 2, beat: 4, passes: 4, offPasses: 3, missed: 0, wrongPad: 3, early: 0, late: 0, meanMs: 4, playedInstead: 'Tom 3' },
     ]);
     expect(r.perPad.find((p) => p.pad === 'Tom 2')).toMatchObject({ wrongPad: 3, missed: 0, accuracy: 62.5 });
   });

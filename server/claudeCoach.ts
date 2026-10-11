@@ -24,10 +24,10 @@ How to read the report:
 - trainer.learned means the player reached the target tempo cleanly. lesson.next is the next lesson to suggest.
 
 Reply with:
-- headline: one short sentence.
-- wentWell: 1 to 3 short items.
+- headline: one short sentence. If trainer.learned is true but problemSpots is not empty, say it was learned and that there is a spot to clean up (for example "Fill learned at 65 BPM. One spot to clean up."), not just "nice work".
+- wentWell: 1 to 3 short items. Never repeat what the headline already says (for example, don't say again that it was learned at that tempo).
 - fixThis: 0 to 2 short items, the most important first. Empty if nothing in the report needs fixing.
-- nextExercise: one specific exercise for next time, with a tempo.
+- nextExercise: one specific exercise for next time, with a tempo. If problemSpots is not empty, it must drill the worst one (the first) first: loop just the beats around it about 10 BPM slower until that note is clean 3 times in a row, then play the full fill. Only suggest moving on to lesson.next when problemSpots is empty.
 Talk like a teacher: plain words, short sentences, no jargon, no emoji. Keep the whole reply under 120 words.`;
 
 const COACHING_SCHEMA = {
@@ -43,6 +43,19 @@ const COACHING_SCHEMA = {
 } as const;
 
 class CoachTimeout extends Error {}
+
+/** Longest API error message passed on to the browser. */
+const MAX_DETAIL = 300;
+
+/**
+ * Sort an API failure by what the user has to fix: the key (401, 403), the request itself (400,
+ * 404 for an unknown model, 422: a parameter the model doesn't accept), or neither (429, 5xx, network).
+ */
+export function apiFailureReason(status: number | undefined): FallbackReason {
+  if (status === 401 || status === 403) return 'bad-key';
+  if (status === 400 || status === 404 || status === 422) return 'api-rejected';
+  return 'api-error';
+}
 
 /**
  * Coaching for a session report: Claude if a key is configured and it answers in time with the
@@ -86,8 +99,12 @@ export async function coachReport(report: SessionReport, config: CoachConfig): P
   } catch (error) {
     if (error instanceof CoachTimeout || error instanceof Anthropic.APIConnectionTimeoutError) return rules('timeout');
     if (error instanceof Anthropic.APIUserAbortError) return rules('timeout');
-    console.warn('[coach] Claude call failed:', error instanceof Error ? error.message : error);
-    return rules('api-error');
+    const message = error instanceof Error ? error.message : String(error);
+    const status = error instanceof Anthropic.APIError ? error.status : undefined;
+    console.warn(`[coach] Claude call failed${status ? ` (HTTP ${status})` : ''}: ${message}`);
+    const reason = apiFailureReason(status);
+    // The API's message says which parameter or key was wrong; pass it on so the UI can show it.
+    return reason === 'api-error' ? rules(reason) : { ...rules(reason), detail: message.slice(0, MAX_DETAIL) };
   } finally {
     clearTimeout(timer);
   }

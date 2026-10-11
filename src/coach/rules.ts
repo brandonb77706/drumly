@@ -11,6 +11,7 @@ export const STEADY_SPREAD_MS = 15;
 export const SLOW_DOWN_BPM = 10;
 const MAX_FIXES = 2;
 const MAX_WINS = 3;
+const SPOT_WORDS: Record<number, string> = { 2: 'Two', 3: 'Three' };
 
 interface Fix {
   text: string;
@@ -25,19 +26,21 @@ export function ruleBasedCoaching(report: SessionReport): Coaching {
   const fixes = findFixes(report);
   const fixThis = fixes.slice(0, MAX_FIXES).map((f) => f.text);
   const learned = report.trainer?.learned === true;
+  // Problem spots come first: never send the player on to the next lesson with a known bad note.
+  const worst = report.problemSpots[0];
   return {
     headline: headline(report, fixThis.length),
     wentWell: wentWell(report).slice(0, MAX_WINS),
     fixThis,
-    nextExercise: learned ? nextAfterLearning(report) : (fixes[0]?.exercise ?? keepGoing(report)),
+    nextExercise: worst ? spotDrill(report, worst) : learned ? nextAfterLearning(report) : (fixes[0]?.exercise ?? keepGoing(report)),
   };
 }
 
 /** Everything worth fixing, most important first. */
 function findFixes(r: SessionReport): Fix[] {
   const fixes: Fix[] = [];
-  const lastBpm = r.accuracy.perPass.at(-1)?.bpm ?? r.bpm.max;
-  const slowBpm = Math.max(MIN_BPM, lastBpm - SLOW_DOWN_BPM);
+  const lastBpm = lastPassBpm(r);
+  const slowBpm = slowDownBpm(r);
   const part = r.fill ? `just ${r.fill.beats}` : 'just that beat';
 
   // Repeated wrong pad on one note: the hand is going to the wrong drum.
@@ -45,7 +48,7 @@ function findFixes(r: SessionReport): Fix[] {
   if (wrong) {
     fixes.push({
       text: `${wrong.pad} on ${wrong.where} keeps landing on ${wrong.playedInstead}. Play ${part} slowly until your hand finds ${wrong.pad}.`,
-      exercise: `Loop ${part} at ${slowBpm} BPM until ${wrong.pad} is right 5 times in a row, then play the whole thing again.`,
+      exercise: spotDrill(r, wrong),
     });
   }
 
@@ -54,7 +57,7 @@ function findFixes(r: SessionReport): Fix[] {
   if (missed) {
     fixes.push({
       text: `${missed.pad} on ${missed.where} keeps dropping out (missed in ${missed.missed} of ${missed.passes} passes). Slow down until every note sounds.`,
-      exercise: `Play it at ${slowBpm} BPM and make every note sound, ${missed.pad} included, 5 passes in a row.`,
+      exercise: spotDrill(r, missed),
     });
   }
 
@@ -95,7 +98,7 @@ function findFixes(r: SessionReport): Fix[] {
 
   // A note that is repeatedly early or late (but on the right pad).
   const timingSpot = r.problemSpots.find((s) => s !== wrong && s !== missed && s.meanMs !== null && s.early + s.late >= 2);
-  if (timingSpot) fixes.push(timingSpotFix(timingSpot, lastBpm));
+  if (timingSpot) fixes.push(timingSpotFix(r, timingSpot));
 
   // Getting worse at a steady tempo usually means tired or tense.
   if (r.accuracy.trend === 'getting worse' && r.bpm.min === r.bpm.max) {
@@ -107,21 +110,45 @@ function findFixes(r: SessionReport): Fix[] {
   return fixes;
 }
 
-function timingSpotFix(s: ProblemSpotReport, bpm: number): Fix {
+function timingSpotFix(r: SessionReport, s: ProblemSpotReport): Fix {
   const late = (s.meanMs ?? 0) > 0;
   const n = Math.abs(s.meanMs ?? 0);
   const count = late ? s.late : s.early;
   return {
     text: `${s.pad} on ${s.where} comes in ${late ? 'late' : 'early'} (${count} of ${s.passes} passes, about ${n} ms).`,
-    exercise: `At ${bpm} BPM, play the bar with ${s.pad} and say the count out loud, putting ${s.pad} right on its syllable.`,
+    exercise: spotDrill(r, s),
   };
+}
+
+function lastPassBpm(r: SessionReport): number {
+  return r.accuracy.perPass.at(-1)?.bpm ?? r.bpm.max;
+}
+
+function slowDownBpm(r: SessionReport): number {
+  return Math.max(MIN_BPM, lastPassBpm(r) - SLOW_DOWN_BPM);
+}
+
+/**
+ * Drill one problem spot slowly: just the beats around it, until it's clean 3 times in a row.
+ * E.g. "Loop just beats 3 and 4 of bar 2 at 55 BPM until Tom 2 is clean 3 times in a row, then try the full fill."
+ */
+export function spotDrill(r: SessionReport, s: ProblemSpotReport): string {
+  let part: string;
+  if (r.fill) {
+    // Problem spots of a fill lesson are inside the fill or its landing (the next downbeat).
+    part = s.bar === r.fill.bar ? `just ${r.fill.beats} of bar ${r.fill.bar}` : `${r.fill.beats} of bar ${r.fill.bar} into the 1 of bar ${s.bar}`;
+  } else {
+    part = `just bar ${s.bar}`;
+  }
+  const then = r.fill ? 'try the full fill' : `play the whole ${r.lesson.category}`;
+  return `Loop ${part} at ${slowDownBpm(r)} BPM until ${s.pad} is clean 3 times in a row, then ${then}.`;
 }
 
 function wentWell(r: SessionReport): string[] {
   const wins: string[] = [];
   const acc = r.accuracy.overall;
   const what = r.graded === 'fill' ? 'the fill' : 'the lesson';
-  if (r.trainer?.learned) wins.push(`You learned it at ${r.trainer.finalBpm} BPM.`);
+  // "Learned at N BPM" is the headline's job; saying it again here is just repetition.
   if (r.trainer && r.bpm.max > r.bpm.min) wins.push(`You climbed from ${r.bpm.min} to ${r.bpm.max} BPM.`);
   if (acc !== null && acc >= 90) wins.push(`Right drums, right place: ${acc}% on ${what}.`);
   if (r.accuracy.trend === 'improving') wins.push(`You got better as you went: ${r.accuracy.start}% to ${r.accuracy.end}%.`);
@@ -134,7 +161,12 @@ function wentWell(r: SessionReport): string[] {
 
 function headline(r: SessionReport, fixCount: number): string {
   const acc = r.accuracy.overall ?? 0;
-  if (r.trainer?.learned) return `${r.lesson.category === 'fill' ? 'Fill' : 'Beat'} learned at ${r.trainer.finalBpm} BPM. Nice work.`;
+  if (r.trainer?.learned) {
+    const learned = `${r.lesson.category === 'fill' ? 'Fill' : 'Beat'} learned at ${r.trainer.finalBpm} BPM.`;
+    const spots = r.problemSpots.length;
+    if (spots === 0) return `${learned} Nice work.`;
+    return `${learned} ${spots === 1 ? 'One spot' : `${SPOT_WORDS[spots] ?? spots} spots`} to clean up.`;
+  }
   if (acc < 70) return "Tough one, but you're putting in the reps.";
   if (fixCount === 0) return acc >= 90 ? 'Clean session. Time to push the tempo.' : 'Good session.';
   return fixCount === 1 ? 'Good work. One thing to tighten up.' : 'Good work. Two things to tighten up.';
