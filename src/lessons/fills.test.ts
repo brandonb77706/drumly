@@ -5,6 +5,7 @@ import { ClickScheduler } from '../metronome/ClickScheduler';
 import { lessonToExpectedNotes } from './expected';
 import { FILL_LESSONS } from './fills';
 import { formatLessonText, lessonFromText } from './parse';
+import { isInFocus } from './focus';
 import type { ClickTime, Lesson } from './types';
 import { ALL_LESSONS } from '.';
 
@@ -47,11 +48,10 @@ afterEach(() => {
 });
 
 describe('fill lessons', () => {
-  it('are fills, 3 bars long with the landing in bar 3', () => {
+  it('are fills, 3 bars long with an accented crash plus kick landing in bar 3', () => {
     for (const l of FILL_LESSONS) {
       expect(l.category).toBe('fill');
       expect(l.bars).toBe(3);
-      expect(l.subdivision).toBe('sixteenth');
       expect(l.notes.filter((n) => n.bar === 2).map((n) => [n.pad, n.beat, n.subdivision, n.accent ?? false])).toEqual([
         ['kick', 0, 0, false],
         ['crash', 0, 0, true],
@@ -59,9 +59,43 @@ describe('fill lessons', () => {
     }
   });
 
-  it('starter lessons are beats, and the picker list has beats before fills', () => {
-    expect(ALL_LESSONS.map((l) => l.category)).toEqual(['beat', 'beat', 'beat', 'beat', 'fill', 'fill']);
+  it('are sorted easiest to hardest, and beats come before fills', () => {
+    expect(FILL_LESSONS.map((l) => l.id)).toEqual([
+      'fill-snare-eighths',
+      'fill-snare-sixteenths',
+      'fill-snare-floor-tom',
+      'fill-triplet',
+      'fill-around-toms',
+      'fill-full-bar-toms',
+    ]);
+    expect(ALL_LESSONS.map((l) => l.category)).toEqual(['beat', 'beat', 'beat', 'beat', 'fill', 'fill', 'fill', 'fill', 'fill', 'fill']);
     expect(lessonFromText({ id: 'x', title: '', description: '', defaultBpm: 60, beatsPerBar: 4, subdivision: 'quarter', text: 'SN: x---' }).category).toBe('beat');
+  });
+
+  it('each has the expected note count, grid and focus range (fill through the landing)', () => {
+    const spec = Object.fromEntries(FILL_LESSONS.map((l) => [l.id, [l.notes.length, l.subdivision, l.focus]]));
+    const focus = (bar: number, beat: number) => ({ start: { bar, beat, subdivision: 0 }, end: { bar: 2, beat: 0, subdivision: 0 } });
+    expect(spec).toEqual({
+      'fill-snare-eighths': [12 + 11 + 2, 'eighth', focus(1, 3)],
+      'fill-snare-sixteenths': [12 + 13 + 2, 'sixteenth', focus(1, 3)],
+      'fill-snare-floor-tom': [12 + 13 + 2, 'sixteenth', focus(1, 3)],
+      'fill-triplet': [8 + 9 + 2, 'triplet', focus(1, 3)],
+      'fill-around-toms': [12 + 14 + 2, 'sixteenth', focus(1, 2)],
+      'fill-full-bar-toms': [12 + 16 + 2, 'sixteenth', focus(1, 0)],
+    });
+  });
+
+  it('the fill parts play the right pads in the right places', () => {
+    const fillPart = (id: string) => {
+      const l = FILL_LESSONS.find((f) => f.id === id)!;
+      return l.notes.filter((n) => n.bar === 1 && isInFocus(n, l)).map((n) => [n.pad, n.beat, n.subdivision]);
+    };
+    expect(fillPart('fill-snare-eighths')).toEqual([['snare', 3, 0], ['snare', 3, 1]]);
+    expect(fillPart('fill-snare-floor-tom')).toEqual([['snare', 3, 0], ['snare', 3, 1], ['tom3', 3, 2], ['tom3', 3, 3]]);
+    expect(fillPart('fill-triplet')).toEqual([['snare', 3, 0], ['tom1', 3, 1], ['tom2', 3, 2]]);
+    expect(fillPart('fill-full-bar-toms').map((n) => n[0])).toEqual([
+      ...Array(4).fill('snare'), ...Array(4).fill('tom1'), ...Array(4).fill('tom2'), ...Array(4).fill('tom3'),
+    ]);
   });
 
   it('snare 16ths fill: beat bar, beats 1-3 of the beat then four 16th snares on beat 4, landing', () => {

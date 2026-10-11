@@ -12,12 +12,13 @@ import {
   type ScriptedHit,
 } from './input';
 import { rockBeat } from './patterns';
-import { LiveGrader, DEFAULT_GRADING_CONFIG, summarize, type ExpectedNote, type GradeSummary, type HitVerdict } from './grading';
+import { LiveGrader, DEFAULT_GRADING_CONFIG, summarize, type ExpectedNote, type GradeResult, type GradeSummary, type HitVerdict } from './grading';
 import { GRADE_BARS, GRADE_BPM, GRADE_SCENARIOS, checkSummary, rockBeatNotes, type GradeScenario } from './gradeScenarios';
 import { Metronome, MAX_BPM, MIN_BPM, SUBDIVISIONS, isClickMode, type ClickMode, type MetronomeClick, type Subdivision } from './metronome';
 import {
   ALL_LESSONS,
   SPEED_OPTIONS,
+  focusResult,
   formatLessonText,
   lessonBpmAt,
   lessonNoteSource,
@@ -29,7 +30,9 @@ import {
   type LessonCategory,
 } from './lessons';
 import { HighwayModel, HighwayRenderer } from './highway';
+import { TrainerSession, defaultLadderSettings, passBpm, type LadderSettings, type TrainerPassReport } from './trainer';
 import { PAD_LABELS, buildSummary, fmtPct, node } from './ui/summary';
+import { formatOffset, formatTimingPhrase } from './ui/format';
 
 const LOG_SIZE = 30;
 
@@ -162,9 +165,9 @@ function pushLogRow(row: HTMLTableRowElement): void {
 
 function verdictText(v: HitVerdict): string {
   if (v.status === 'extra') return 'extra';
-  const offset = `${v.offsetMs > 0 ? '+' : ''}${v.offsetMs.toFixed(1)}`;
-  const what = v.status === 'hit' ? 'hit' : `wrong pad (wanted ${PAD_LABELS[v.note.pad]})`;
-  return `${what} · ${v.timing} ${offset}`;
+  // "perfect" next to "wrong pad" reads as a contradiction, so wrong-pad timing is in words.
+  if (v.status === 'wrongPad') return `wrong pad (wanted ${PAD_LABELS[v.note.pad]}) · ${formatTimingPhrase(v.offsetMs)}`;
+  return `hit · ${v.timing} ${formatOffset(v.offsetMs)}`;
 }
 
 function verdictClass(v: HitVerdict): string {
@@ -653,6 +656,20 @@ const lessonSpeedSelect = el<HTMLSelectElement>('lesson-speed');
 const lessonBpmInput = el<HTMLInputElement>('lesson-bpm');
 const clickModeSelect = el<HTMLSelectElement>('click-mode');
 const lessonLoopInput = el<HTMLInputElement>('lesson-loop');
+const lessonTrainerInput = el<HTMLInputElement>('lesson-trainer');
+const trainerSettingsEl = el('trainer-settings');
+const trainerStartInput = el<HTMLInputElement>('trainer-start');
+const trainerTargetInput = el<HTMLInputElement>('trainer-target');
+const trainerStepInput = el<HTMLInputElement>('trainer-step');
+const trainerThresholdInput = el<HTMLInputElement>('trainer-threshold');
+const trainerPassesInput = el<HTMLInputElement>('trainer-passes');
+const trainerStatusEl = el('trainer-status');
+const trainerBpmEl = el('trainer-bpm');
+const trainerProgressEl = el('trainer-progress');
+const trainerMessageEl = el('trainer-message');
+const problemSpotsEl = el('problem-spots');
+const problemListEl = el('problem-list');
+const problemRefreshButton = el<HTMLButtonElement>('problem-refresh');
 const lessonPreviewButton = el<HTMLButtonElement>('lesson-preview');
 const lessonStartButton = el<HTMLButtonElement>('lesson-start');
 const lessonDescriptionEl = el('lesson-description');
@@ -687,6 +704,8 @@ interface LessonRun {
   lesson: Lesson;
   loop: boolean;
   grader: LiveGrader;
+  /** Trainer mode: the tempo ladder and problem spots. */
+  trainer: TrainerSession | null;
   /** Next pass whose summary hasn't been shown yet. */
   nextPass: number;
   passWindows: Map<number, PassWindow>;
@@ -848,6 +867,11 @@ function showLesson(lesson: Lesson): void {
   lessonSummaryEl.replaceChildren();
   lessonFeedbackEl.textContent = '';
   lessonFeedbackEl.className = 'lesson-feedback';
+  const ladder = defaultLadderSettings(lesson);
+  trainerStartInput.value = String(ladder.startBpm);
+  trainerTargetInput.value = String(ladder.targetBpm);
+  trainerStatusEl.hidden = true;
+  problemSpotsEl.hidden = true;
   showHighway(new HighwayModel(lesson), null);
 }
 
@@ -857,8 +881,54 @@ function updateLessonControls(): void {
   lessonStartButton.classList.toggle('playing', active);
   lessonPreviewButton.disabled = active;
   lessonSelect.disabled = active;
-  lessonLoopInput.disabled = active;
+  const trainer = lessonTrainerInput.checked;
+  lessonLoopInput.disabled = active || trainer; // the trainer always loops
+  lessonTrainerInput.disabled = active;
+  // In the trainer the ladder owns the tempo.
+  const trainerRunning = active && trainer;
+  lessonBpmInput.disabled = trainerRunning;
+  lessonSpeedSelect.disabled = trainerRunning;
+  trainerSettingsEl.hidden = !trainer;
+  for (const input of [trainerStartInput, trainerTargetInput, trainerStepInput, trainerThresholdInput, trainerPassesInput]) input.disabled = active;
+  problemRefreshButton.hidden = !(lessonRun?.trainer);
   highway.message = active ? '' : IDLE_MESSAGE;
+}
+
+/** Trainer settings from the inputs, clamped to sensible values. */
+function trainerSettings(lesson: Lesson): LadderSettings {
+  const defaults = defaultLadderSettings(lesson);
+  const num = (input: HTMLInputElement, fallback: number, min: number, max: number) => {
+    const v = Number(input.value);
+    const value = input.value !== '' && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback;
+    input.value = String(value);
+    return value;
+  };
+  return {
+    startBpm: num(trainerStartInput, defaults.startBpm, MIN_BPM, MAX_BPM),
+    targetBpm: num(trainerTargetInput, defaults.targetBpm, MIN_BPM, MAX_BPM),
+    stepBpm: num(trainerStepInput, defaults.stepBpm, 1, 50),
+    passThreshold: num(trainerThresholdInput, defaults.passThreshold, 1, 100),
+    passesNeeded: Math.round(num(trainerPassesInput, defaults.passesNeeded, 1, 10)),
+  };
+}
+
+function showTrainerStatus(trainer: TrainerSession, message: string, tone: '' | 'up' | 'down' | 'done'): void {
+  trainerStatusEl.hidden = false;
+  trainerBpmEl.textContent = `${formatBpm(trainer.bpm)} BPM`;
+  trainerProgressEl.textContent = trainer.progress();
+  // The progress line already says "Fill learned at …" when done.
+  trainerMessageEl.textContent = trainer.done ? 'Nice work!' : message;
+  trainerMessageEl.className = `trainer-message ${tone}`;
+}
+
+function showProblemSpots(trainer: TrainerSession): void {
+  const spots = trainer.problems.worst(3);
+  problemSpotsEl.hidden = false;
+  problemListEl.replaceChildren(
+    ...(spots.length > 0
+      ? spots.map((spot) => node('li', '', trainer.problems.describe(spot, (pad) => PAD_LABELS[pad])))
+      : [node('li', 'none', trainer.reports.length > 0 ? 'No problem spots yet: every note in the fill has been on time and on the right pad.' : 'Play a pass first.')]),
+  );
 }
 
 function lessonBpm(lesson: Lesson): number {
@@ -887,10 +957,25 @@ lessonBpmInput.addEventListener('change', () => {
   commitLessonBpm();
 });
 lessonLoopInput.addEventListener('change', () => lessonLoopInput.blur());
+lessonTrainerInput.addEventListener('change', () => {
+  lessonTrainerInput.blur();
+  updateLessonControls();
+});
+for (const input of [trainerStartInput, trainerTargetInput, trainerStepInput, trainerThresholdInput, trainerPassesInput]) {
+  input.addEventListener('change', () => {
+    trainerSettings(selectedLesson()); // normalizes the values shown
+    input.blur();
+  });
+}
+problemRefreshButton.addEventListener('click', () => {
+  problemRefreshButton.blur();
+  if (lessonRun?.trainer) showProblemSpots(lessonRun.trainer);
+});
 
 lessonStartButton.addEventListener('click', () => {
   lessonStartButton.blur();
   if (lessonRun || previewRun || lessonStarting) stopLesson('Stopped.');
+  else if (lessonTrainerInput.checked) startLesson(selectedLesson(), true, 'trainer');
   else startLesson(selectedLesson(), lessonLoopInput.checked, 'play');
 });
 lessonPreviewButton.addEventListener('click', () => {
@@ -905,9 +990,15 @@ function barStartTime(bar: number, around: number, spanMs: number): number | nul
 }
 
 /** Must be called synchronously from a click handler: it starts audio. */
-function startLesson(lesson: Lesson, loop: boolean, mode: 'play' | 'preview'): void {
+function startLesson(lesson: Lesson, loop: boolean, mode: 'play' | 'preview' | 'trainer'): void {
   if (metronome.isRunning) stopMetronome(); // also stops grade tests and test patterns
-  applyMetronomeSettings({ bpm: lessonBpm(lesson), beatsPerBar: lesson.beatsPerBar, subdivision: lesson.subdivision, countIn: true });
+  const trainer = mode === 'trainer' ? new TrainerSession(lesson, trainerSettings(lesson)) : null;
+  const bpm = trainer ? trainer.bpm : lessonBpm(lesson);
+  if (trainer) lessonBpmInput.value = formatBpm(bpm);
+  applyMetronomeSettings({ bpm, beatsPerBar: lesson.beatsPerBar, subdivision: lesson.subdivision, countIn: true });
+  problemSpotsEl.hidden = true;
+  trainerStatusEl.hidden = true;
+  if (trainer) showTrainerStatus(trainer, 'Count-in… then play. The groove is played but only the shaded fill is graded.', '');
   lessonStarting = true;
   updateLessonControls();
   lessonHistoryEl.replaceChildren();
@@ -976,7 +1067,7 @@ function startLesson(lesson: Lesson, loop: boolean, mode: 'play' | 'preview'): v
     grader.start();
 
     lessonStarting = false;
-    lessonRun = { lesson, loop, grader, nextPass: 0, passWindows: new Map(), accuracies: [] };
+    lessonRun = { lesson, loop, grader, trainer, nextPass: 0, passWindows: new Map(), accuracies: [] };
     lessonStatusEl.textContent = loop ? 'Count-in… then play. Looping until you press Stop.' : 'Count-in… then play.';
     updateLessonControls();
   })();
@@ -995,6 +1086,7 @@ function stopLesson(message: string): void {
     const final = run.grader.stop();
     // Show the final batch grade on the highway, so it agrees with the summary.
     highwayView?.model.syncResults(final.results);
+    if (run.trainer) showProblemSpots(run.trainer);
   }
   if (metronome.isRunning) stopMetronome();
   lessonStatusEl.textContent = message;
@@ -1027,28 +1119,54 @@ function lessonFrame(now: number): void {
   if (now <= passWin.lastNote + windowMs + PASS_REPORT_GRACE_MS) return;
 
   // Pass k is over. Single run: final batch grade. Loop: this pass's slice of the live grade.
-  let summary: GradeSummary;
+  let result: GradeResult;
   if (!run.loop) {
     const final = run.grader.stop();
     highwayView?.model.syncResults(final.results);
-    summary = final.summary;
+    result = final.results;
   } else {
-    summary = summarize(resultForPass(run.grader.getResults(), k, passWin.start - windowMs, passWin.end - windowMs));
+    result = resultForPass(run.grader.getResults(), k, passWin.start - windowMs, passWin.end - windowMs);
     run.passWindows.delete(k);
   }
   run.nextPass = k + 1;
-  if (summary.expected !== lesson.notes.length) {
+  const full = summarize(result);
+  if (full.expected !== lesson.notes.length) {
     // Should never happen; make it visible rather than silently grading a partial pass.
-    console.warn(`Pass ${k + 1} of "${lesson.id}" graded ${summary.expected} notes, expected ${lesson.notes.length}.`);
+    console.warn(`Pass ${k + 1} of "${lesson.id}" graded ${full.expected} notes, expected ${lesson.notes.length}.`);
   }
-  showPassSummary(run, k, summary);
+  const report = run.trainer ? trainerPass(run, run.trainer, k, result, passBpm(lesson, passWin.start, passWin.end)) : null;
+  const focus = report ? report.focus : summarize(focusResult(result, lesson, windowMs));
+  showPassSummary(run, k, focus, full, report);
   if (!run.loop) {
     lessonRun = null; // already graded; stopLesson must not stop the grader again
     stopLesson('Done. Press Start to play it again.');
+  } else if (run.trainer?.done) {
+    stopLesson(`Fill learned at ${formatBpm(run.trainer.bpm)} BPM!`);
   }
 }
 
-function showPassSummary(run: LessonRun, pass: number, summary: GradeSummary): void {
+/** Feed a pass to the trainer, and book any tempo change for the next pass start that isn't scheduled yet. */
+function trainerPass(run: LessonRun, trainer: TrainerSession, pass: number, result: GradeResult, playedBpm: number): TrainerPassReport {
+  const report = trainer.recordPass(pass, result, playedBpm);
+  if (report.change === 'speedUp' || report.change === 'slowDown') {
+    const bars = run.lesson.bars;
+    const bar = Math.ceil(metronome.nextUnscheduledBar() / bars) * bars;
+    // Commits through the scheduler's beat-boundary logic exactly at that downbeat: nothing moves or doubles.
+    if (!metronome.setBpmAtBar(trainer.bpm, bar)) console.warn(`Could not book ${trainer.bpm} BPM at bar ${bar}.`);
+    lessonBpmInput.value = formatBpm(trainer.bpm);
+  }
+  const tone = report.change === 'speedUp' ? 'up' : report.change === 'slowDown' ? 'down' : report.change === 'finished' ? 'done' : '';
+  showTrainerStatus(trainer, report.message, tone);
+  // Ring the worst notes so they stand out on the next pass.
+  highwayView?.model.setHighlights(trainer.problems.worst(3).map((p) => p.stats.index));
+  if (!problemSpotsEl.hidden) showProblemSpots(trainer);
+  return report;
+}
+
+/**
+ * Headline: the focus range (the fill) if the lesson has one; whole-lesson stats stay available below.
+ */
+function showPassSummary(run: LessonRun, pass: number, summary: GradeSummary, full: GradeSummary, report: TrainerPassReport | null): void {
   const accuracy = summary.accuracy ?? 0;
   run.accuracies.push(accuracy);
   const previousBest = bestAccuracy.get(run.lesson.id);
@@ -1057,10 +1175,15 @@ function showPassSummary(run: LessonRun, pass: number, summary: GradeSummary): v
   renderLessonPicker();
 
   const best = bestAccuracy.get(run.lesson.id)!;
-  const heading = node('h3', '', `Pass ${pass + 1}: ${fmtPct(summary.accuracy)}${isBest ? ' · new session best!' : ` · session best ${fmtPct(best)}`}`);
+  const focused = run.lesson.focus !== undefined;
+  const at = report ? ` at ${formatBpm(report.bpm)} BPM` : '';
+  const heading = node('h3', '', `Pass ${pass + 1}${at}: ${fmtPct(summary.accuracy)}${focused ? ' on the fill' : ''}${isBest ? ' · new session best!' : ` · session best ${fmtPct(best)}`}`);
   const parts: HTMLElement[] = [heading, ...buildSummary(summary)];
-  if (summary.expected !== run.lesson.notes.length) {
-    parts.push(node('p', 'scenario-check fail', `Only ${summary.expected} of the lesson's ${run.lesson.notes.length} notes were graded in this pass. Please report this.`));
+  if (focused) {
+    parts.push(node('details', 'full-stats', undefined, [node('summary', '', `Whole lesson, groove included: ${fmtPct(full.accuracy)}`), node('div', 'summary', undefined, buildSummary(full))]));
+  }
+  if (full.expected !== run.lesson.notes.length) {
+    parts.push(node('p', 'scenario-check fail', `Only ${full.expected} of the lesson's ${run.lesson.notes.length} notes were graded in this pass. Please report this.`));
   }
   lessonSummaryEl.replaceChildren(node('div', 'summary', undefined, parts));
 
@@ -1077,5 +1200,5 @@ updateLessonControls();
 // Dev-server only: handles for poking at the app from the console or a browser test script.
 // Vite strips this from production builds (import.meta.env.DEV is false there).
 if (import.meta.env.DEV) {
-  Object.assign(window, { __drumly: { metronome, manager, TestSource, ALL_LESSONS, lessonToExpectedNotes, highwayView: () => highwayView } });
+  Object.assign(window, { __drumly: { metronome, manager, TestSource, ALL_LESSONS, lessonToExpectedNotes, highwayView: () => highwayView, lessonRun: () => lessonRun } });
 }

@@ -27,6 +27,10 @@ const COLORS = {
   now: '#ff8a3d',
   tick: '#ffffff',
   accentRing: 'rgba(255, 255, 255, 0.85)',
+  focus: 'rgba(127, 180, 255, 0.14)',
+  focusEdge: 'rgba(127, 180, 255, 0.45)',
+  focusLabel: '#7fb4ff',
+  problemRing: '#ff5c8a',
 } as const;
 
 const LANE_HEIGHT_CSS = 34;
@@ -45,6 +49,8 @@ export class HighwayRenderer {
   private readonly observer: ResizeObserver | null;
   private model: HighwayModel | null = null;
   private labels: string[] = [];
+  /** Whether the current layout includes the "other" lane. */
+  private showOther = false;
   private layout: HighwayLayout;
   private dpr = 1;
   private cssWidth = 0;
@@ -68,8 +74,14 @@ export class HighwayRenderer {
   setModel(model: HighwayModel | null): void {
     this.model = model;
     this.labels = model ? model.lanes.map((p) => this.padLabel(p)) : [];
-    // Canvas height follows the lane count; width follows the page.
-    this.canvas.style.height = `${HEADER_CSS + (Math.max(1, this.labels.length) + 0.5) * LANE_HEIGHT_CSS}px`;
+    this.applyHeight();
+  }
+
+  /** Canvas height follows the lane count (plus "other" once needed); width follows the page. */
+  private applyHeight(): void {
+    this.showOther = this.model?.hasOtherLane ?? false;
+    const lanes = Math.max(1, this.labels.length) + (this.showOther ? 1 : 0);
+    this.canvas.style.height = `${HEADER_CSS + lanes * LANE_HEIGHT_CSS}px`;
     this.resize();
   }
 
@@ -79,7 +91,8 @@ export class HighwayRenderer {
 
   /** Draw the highway as of `now` (ms, performance.now() clock). */
   draw(now: number): void {
-    if (window.devicePixelRatio !== this.dpr) this.resize();
+    if ((this.model?.hasOtherLane ?? false) !== this.showOther) this.applyHeight();
+    else if (window.devicePixelRatio !== this.dpr) this.resize();
     const { ctx, layout } = this;
     const { width: w, height: h, labelWidth, laneHeight, lanesTop, otherTop, otherHeight } = layout;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
@@ -95,8 +108,10 @@ export class HighwayRenderer {
       ctx.fillStyle = COLORS.laneEdge;
       ctx.fillRect(0, top, w, 1);
     }
-    ctx.fillStyle = COLORS.laneEdge;
-    ctx.fillRect(0, otherTop, w, 1);
+    if (this.showOther) {
+      ctx.fillStyle = COLORS.laneEdge;
+      ctx.fillRect(0, otherTop, w, 1);
+    }
 
     const model = this.model;
     let visibleNotes = 0;
@@ -105,6 +120,24 @@ export class HighwayRenderer {
       ctx.beginPath();
       ctx.rect(labelWidth, 0, w - labelWidth, h);
       ctx.clip();
+
+      // Focus range: the part being graded for the headline number.
+      for (const region of model.focusRegions) {
+        if (Number.isNaN(region.start)) continue;
+        const x0 = noteToX(region.start - region.padMs, now, layout);
+        const x1 = Number.isNaN(region.end) ? w : noteToX(region.end + region.padMs, now, layout);
+        if (x1 < labelWidth || x0 > w) continue;
+        ctx.fillStyle = COLORS.focus;
+        ctx.fillRect(x0, lanesTop, x1 - x0, h - lanesTop);
+        ctx.fillStyle = COLORS.focusEdge;
+        ctx.fillRect(x0, 0, 1, h);
+        if (!Number.isNaN(region.end)) ctx.fillRect(x1 - 1, 0, 1, h);
+        ctx.font = SMALL_FONT;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = COLORS.focusLabel;
+        ctx.fillText('graded', x0 + 4, lanesTop / 2 + 1);
+      }
 
       // Grid: bar lines bold, beat lines thin, count-in clicks as faint markers.
       for (const line of model.lines) {
@@ -120,7 +153,7 @@ export class HighwayRenderer {
           ctx.fillStyle = COLORS.countIn;
           ctx.fillRect(x - 0.5, lanesTop, 1, otherTop - lanesTop);
           ctx.beginPath();
-          ctx.arc(x, lanesTop / 2, 4, 0, TAU);
+          ctx.arc(x, lanesTop / 2, 3, 0, TAU);
           ctx.fill();
         }
       }
@@ -143,6 +176,14 @@ export class HighwayRenderer {
           ctx.lineWidth = 2;
           ctx.stroke();
         }
+        // Problem spot from earlier passes: ring it while it's still to be played.
+        if (note.state === 'pending' && model.isHighlighted(note)) {
+          ctx.strokeStyle = COLORS.problemRing;
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.arc(x, y, r + 5, 0, TAU);
+          ctx.stroke();
+        }
       }
 
       // Hits: a tick at the real hit time, so early or late shows as a gap from the note.
@@ -151,7 +192,7 @@ export class HighwayRenderer {
         const x = noteToX(tick.hit.time, now, layout);
         if (x < labelWidth - 2 || x > w + 2) continue;
         const y = laneCenterY(tick.lane, layout);
-        const half = tick.lane < 0 ? otherHeight * 0.4 : tickHalf;
+        const half = tick.lane < 0 ? otherHeight * 0.42 : tickHalf;
         ctx.fillStyle = tick.state === 'extra' ? STATE_COLORS.extra : COLORS.tick;
         ctx.fillRect(x - 1, y - half, 2, half * 2);
       }
@@ -176,9 +217,11 @@ export class HighwayRenderer {
     for (let lane = 0; lane < this.labels.length; lane++) {
       ctx.fillText(this.labels[lane]!, 10, laneCenterY(lane, layout), labelWidth - 16);
     }
-    ctx.font = SMALL_FONT;
-    ctx.fillStyle = COLORS.muted;
-    ctx.fillText('other', 10, laneCenterY(-1, layout));
+    if (this.showOther) {
+      ctx.font = SMALL_FONT;
+      ctx.fillStyle = COLORS.muted;
+      ctx.fillText('other', 10, laneCenterY(-1, layout));
+    }
 
     if (visibleNotes === 0 && this.message) {
       ctx.textAlign = 'center';
@@ -197,6 +240,6 @@ export class HighwayRenderer {
     const pixelHeight = Math.round(this.cssHeight * this.dpr);
     if (this.canvas.width !== pixelWidth) this.canvas.width = pixelWidth;
     if (this.canvas.height !== pixelHeight) this.canvas.height = pixelHeight;
-    this.layout = computeLayout(this.cssWidth, this.cssHeight, this.labels.length, { headerHeight: HEADER_CSS });
+    this.layout = computeLayout(this.cssWidth, this.cssHeight, this.labels.length, { headerHeight: HEADER_CSS, otherLane: this.showOther });
   }
 }

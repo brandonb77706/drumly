@@ -167,14 +167,35 @@ describe('HighwayModel', () => {
     expect(n1!.state).toBe('perfect');
   });
 
-  it('wrong pad notes show wrongPad, with the tick in the note\'s lane', () => {
+  it('wrong pad: the note shows wrongPad in its own lane, the tick goes in the lane of the pad played', () => {
+    const model = new HighwayModel(lesson);
+    model.refresh(3000, gridSource());
+    const snare = model.notes.find((n) => n.pad === 'snare')!;
+    const h = hit('kick', 3502);
+    model.applyVerdict(h, { status: 'wrongPad', note: { id: snare.id, pad: 'snare', time: 3500 }, hit: h, offsetMs: 2, timing: 'perfect' });
+    expect(snare).toMatchObject({ state: 'wrongPad', lane: 1 });
+    expect(model.ticks[0]).toMatchObject({ lane: 2, state: 'wrongPad' });
+    expect(model.hasOtherLane).toBe(false);
+  });
+
+  it('wrong pad on a pad with no lane: tick in "other", which then becomes visible', () => {
     const model = new HighwayModel(lesson);
     model.refresh(3000, gridSource());
     const snare = model.notes.find((n) => n.pad === 'snare')!;
     const h = hit('tom1', 3502);
     model.applyVerdict(h, { status: 'wrongPad', note: { id: snare.id, pad: 'snare', time: 3500 }, hit: h, offsetMs: 2, timing: 'perfect' });
-    expect(snare.state).toBe('wrongPad');
-    expect(model.ticks[0]).toMatchObject({ lane: 1, state: 'wrongPad' });
+    expect(model.ticks[0]).toMatchObject({ lane: -1, state: 'wrongPad' });
+    expect(model.hasOtherLane).toBe(true);
+  });
+
+  it('the "other" lane stays hidden until a hit lands on a pad with no lane', () => {
+    const model = new HighwayModel(lesson);
+    const snareExtra = hit('snare', 3100);
+    model.applyVerdict(snareExtra, { status: 'extra', hit: snareExtra });
+    expect(model.hasOtherLane).toBe(false);
+    const tomExtra = hit('tom2', 3200);
+    model.applyVerdict(tomExtra, { status: 'extra', hit: tomExtra });
+    expect(model.hasOtherLane).toBe(true);
   });
 
   it('syncResults makes the highway match a batch grade exactly', () => {
@@ -223,5 +244,45 @@ describe('HighwayModel', () => {
     const single = new HighwayModel(lesson);
     single.refresh(8000, gridSource());
     expect(single.notes).toHaveLength(0); // the single pass is behind pastMs
+  });
+
+  it('focus regions span the focus start and end clicks of each pass, padded by half a step', () => {
+    const focused = lessonFromText({
+      id: 'fo',
+      title: '',
+      description: '',
+      defaultBpm: 120,
+      beatsPerBar: 4,
+      subdivision: 'eighth',
+      focus: { start: { bar: 0, beat: 3, subdivision: 0 }, end: { bar: 0, beat: 3, subdivision: 1 } },
+      text: 'SN: xxxxxxxx',
+    });
+    const model = new HighwayModel(focused, { passes: Infinity });
+    model.refresh(3000, gridSource());
+    // Bar 0 starts at 3000; beat 4 at 4500, its "and" at 4750. Pass 1 is 2000 ms later.
+    expect(model.focusRegions.map((r) => [r.pass, r.start, r.end, r.padMs])).toEqual([[0, 4500, 4750, 125]]);
+    model.refresh(5000, gridSource(), true);
+    expect(model.focusRegions.map((r) => [r.pass, r.start, r.end])).toEqual([
+      [0, 4500, 4750],
+      [1, 6500, 6750],
+    ]);
+    // Moves with the grid, like notes.
+    model.refresh(5000, gridSource(4), true);
+    expect(model.focusRegions[1]!.start).toBe(6504);
+    // Lessons without a focus have no regions.
+    const plain = new HighwayModel(lesson);
+    plain.refresh(3000, gridSource());
+    expect(plain.focusRegions).toEqual([]);
+  });
+
+  it('highlights notes by lesson index, across passes', () => {
+    const model = new HighwayModel(lesson, { passes: Infinity });
+    model.refresh(5000, gridSource());
+    model.setHighlights([4]); // the accented snare
+    const ringed = model.notes.filter((n) => model.isHighlighted(n));
+    expect(ringed.length).toBeGreaterThanOrEqual(2);
+    expect(ringed.every((n) => n.lessonIndex === 4 && n.pad === 'snare')).toBe(true);
+    model.setHighlights([]);
+    expect(model.notes.some((n) => model.isHighlighted(n))).toBe(false);
   });
 });

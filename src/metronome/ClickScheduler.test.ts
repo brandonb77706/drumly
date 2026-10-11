@@ -97,3 +97,63 @@ describe('ClickScheduler', () => {
     expect(s.scheduleUntil(3.01)).toEqual(preview);
   });
 });
+
+describe('ClickScheduler.updateAtBar', () => {
+  /** 16th grid, 4/4, with a count-in, starting at t = 0. */
+  function sixteenths(bpm = 60) {
+    const s = new ClickScheduler({ bpm, beatsPerBar: 4, subdivision: 'sixteenth', countIn: true });
+    s.start(0);
+    return s;
+  }
+
+  it('changes the tempo exactly at the downbeat of the given bar, scheduled well in advance', () => {
+    const s = sixteenths(60);
+    const early = s.scheduleUntil(4.5); // count-in (4 s) and the start of bar 0
+    expect(s.updateAtBar(3, { bpm: 120 })).toBe(true);
+    const clicks = [...early, ...s.scheduleUntil(30)];
+    const bar3 = clicks.findIndex((c) => c.bar === 3 && c.beat === 0 && c.subdivision === 0);
+    // Count-in 4 s + 3 bars at 60 BPM (4 s each) = 16 s.
+    expect(clicks[bar3]!.time).toBeCloseTo(16, 12);
+    // Everything before bar 3 at 60 BPM, everything after at 120.
+    expect(clicks[bar3]!.time - clicks[bar3 - 1]!.time).toBeCloseTo(0.25, 12);
+    expect(clicks[bar3 + 1]!.time - clicks[bar3]!.time).toBeCloseTo(0.125, 12);
+    // No double click, no gap: indices consecutive, times strictly increasing.
+    clicks.forEach((c, i) => {
+      if (i === 0) return;
+      expect(c.index).toBe(clicks[i - 1]!.index + 1);
+      expect(c.time).toBeGreaterThan(clicks[i - 1]!.time);
+    });
+    expect(s.getSettings().bpm).toBe(120);
+  });
+
+  it('works when requested just before that downbeat is handed out', () => {
+    const s = sixteenths(60);
+    const before = s.scheduleUntil(8 - 1e-9); // up to the last 16th of bar 0 (bar 1 starts at 8 s)
+    expect(before.at(-1)).toMatchObject({ bar: 0, beat: 3, subdivision: 3 });
+    expect(s.nextUnscheduledBar()).toBe(1);
+    expect(s.updateAtBar(1, { bpm: 90 })).toBe(true);
+    const after = s.scheduleUntil(12);
+    expect(after[0]).toMatchObject({ bar: 1, beat: 0, subdivision: 0 });
+    expect(after[0]!.time).toBeCloseTo(8, 12); // gap into the downbeat stays at the old 16th
+    expect(after[1]!.time - after[0]!.time).toBeCloseTo(60 / 90 / 4, 12);
+  });
+
+  it('refuses a bar whose downbeat was already handed out', () => {
+    const s = sixteenths(60);
+    s.scheduleUntil(8.01); // bar 1 downbeat at 8 s is out
+    expect(s.nextUnscheduledBar()).toBe(2);
+    expect(s.updateAtBar(1, { bpm: 90 })).toBe(false);
+    expect(s.scheduleUntil(12).every((c) => Math.abs(c.time - Math.round(c.time * 4) / 4) < 1e-9)).toBe(true);
+    expect(s.getSettings().bpm).toBe(60);
+  });
+
+  it('peek includes the pending change, so projected clicks match what will be scheduled', () => {
+    const s = sixteenths(60);
+    s.scheduleUntil(5);
+    s.updateAtBar(2, { bpm: 75 });
+    const projected = s.peek(25).map((c) => [c.index, c.time]);
+    const actual = s.scheduleUntil(25).map((c) => [c.index, c.time]);
+    expect(projected).toEqual(actual);
+    expect(new ClickScheduler().updateAtBar(0, { bpm: 90 })).toBe(false); // not running
+  });
+});

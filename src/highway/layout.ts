@@ -64,30 +64,37 @@ export interface HighwayLayout {
   readonly laneHeight: number;
   /** Top of the lane area (room above for count-in markers). */
   readonly lanesTop: number;
-  /** Slim strip under the lanes for extra hits on pads that have no lane. */
+  /** Lane under the others for hits on pads that have no lane (height 0 when hidden). */
   readonly otherTop: number;
   readonly otherHeight: number;
 }
 
 export interface LayoutOptions {
-  /** How much upcoming time fits right of the now line, ms. Default 2000. */
+  /** How much upcoming time fits right of the now line, ms. Default 1500. */
   futureMs?: number;
-  /** Fraction of the width where the now line sits. Default 0.25. */
+  /**
+   * Where the now line sits, as a fraction of the lane area (right of the labels). Default 0.35,
+   * which leaves room to glance back at what was just played.
+   */
   nowFraction?: number;
   labelWidth?: number;
   headerHeight?: number;
+  /** Show the "other" lane. Default false. */
+  otherLane?: boolean;
 }
 
-export const DEFAULT_FUTURE_MS = 2000;
+export const DEFAULT_FUTURE_MS = 1500;
+export const DEFAULT_NOW_FRACTION = 0.35;
 
 export function computeLayout(width: number, height: number, laneCount: number, options: LayoutOptions = {}): HighwayLayout {
   const futureMs = options.futureMs ?? DEFAULT_FUTURE_MS;
   const labelWidth = options.labelWidth ?? 96;
   const headerHeight = options.headerHeight ?? 14;
-  const nowX = Math.max(labelWidth + 24, width * (options.nowFraction ?? 0.25));
+  const laneWidth = Math.max(0, width - labelWidth);
+  const nowX = labelWidth + laneWidth * (options.nowFraction ?? DEFAULT_NOW_FRACTION);
   const lanes = Math.max(1, laneCount);
-  // The "other" strip is half a lane tall.
-  const laneHeight = Math.max(1, (height - headerHeight) / (lanes + 0.5));
+  const other = options.otherLane ? 1 : 0;
+  const laneHeight = Math.max(1, (height - headerHeight) / (lanes + other));
   const otherTop = headerHeight + lanes * laneHeight;
   return {
     width,
@@ -99,7 +106,7 @@ export function computeLayout(width: number, height: number, laneCount: number, 
     laneHeight,
     lanesTop: headerHeight,
     otherTop,
-    otherHeight: height - otherTop,
+    otherHeight: other ? laneHeight : 0,
   };
 }
 
@@ -108,7 +115,7 @@ export function noteToX(noteTime: number, now: number, layout: Pick<HighwayLayou
   return layout.nowX + (noteTime - now) * layout.pxPerMs;
 }
 
-/** Vertical center of a lane. Lane -1 is the "other" strip. */
+/** Vertical center of a lane. Lane -1 is the "other" lane. */
 export function laneCenterY(lane: number, layout: HighwayLayout): number {
   if (lane < 0) return layout.otherTop + layout.otherHeight / 2;
   return layout.lanesTop + (lane + 0.5) * layout.laneHeight;

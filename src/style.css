@@ -66,8 +66,9 @@ button {
   border: 1px solid var(--accent); border-radius: 8px;
   background: transparent; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer;
 }
-button:hover:not(:disabled) { background: rgba(255, 138, 61, 0.12); }
-button:disabled { opacity: 0.5; cursor: default; }
+/* Every state has explicit colors (contrast checked: all >= 6.4:1, disabled 5.6:1). */
+button:hover:not(:disabled) { background: #422f27; color: #ffa366; }
+button:disabled, button.primary:disabled { background: transparent; color: var(--muted); border-color: var(--border); cursor: default; }
 
 .panel.grow { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
@@ -83,8 +84,10 @@ td.src-test { color: var(--warn); }
 .met-top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
 .met-top button { width: auto; min-width: 96px; margin: 0; }
 button.primary { background: var(--accent); color: #1a0f05; }
-button.primary:hover:not(:disabled) { background: #ff9d5c; }
-button.primary.playing { background: transparent; color: var(--accent); }
+button.primary:hover:not(:disabled) { background: #ffa366; color: #1a0f05; }
+/* Stop: still a filled button with dark text, in red so it reads as "stop". */
+button.primary.playing { background: #ff6b6b; border-color: #ff6b6b; color: #1a0f05; }
+button.primary.playing:hover:not(:disabled) { background: #ff8787; color: #1a0f05; }
 
 .beats { display: flex; gap: 10px; flex-wrap: wrap; }
 .beat-dot {
@@ -185,3 +188,25 @@ details.lesson-text > summary { cursor: pointer; color: var(--muted); font-size:
 details.debug { margin-top: 28px; border-top: 1px solid var(--border); padding-top: 12px; }
 details.debug > summary { cursor: pointer; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; font-size: 14px; }
 details.debug[open] > summary { margin-bottom: 4px; }
+
+/* ---- Trainer ------------------------------------------------------------- */
+.trainer-settings { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 12px; padding: 10px 12px; border: 1px dashed var(--border); border-radius: 8px; }
+.trainer-settings[hidden], .trainer-status[hidden], .problem-spots[hidden] { display: none; }
+.trainer-settings label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
+.trainer-settings input:disabled, .lesson-head input:disabled, .lesson-head select:disabled { opacity: 0.6; }
+.trainer-settings input { width: 90px; padding: 5px 8px; background: #11141a; color: var(--text); border: 1px solid var(--border); border-radius: 6px; font: inherit; }
+.trainer-status { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; margin: 0 0 10px; padding: 10px 12px; background: #11141a; border: 1px solid var(--border); border-radius: 8px; }
+.trainer-bpm { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.trainer-progress { color: var(--muted); font-variant-numeric: tabular-nums; }
+.trainer-message { font-weight: 600; }
+.trainer-message.up, .trainer-message.done { color: var(--ok); }
+.trainer-message.down { color: var(--warn); }
+.problem-spots { margin-top: 14px; padding: 10px 12px; border: 1px solid #ff5c8a66; border-radius: 8px; }
+.problem-spots h3 { margin: 0; font-size: 15px; color: #ff8fae; }
+.trainer-status button { width: auto; margin: 0 0 0 auto; padding: 6px 10px; font-size: 13px; }
+.trainer-status button[hidden] { display: none; }
+.problem-spots ol { margin: 8px 0 0; padding-left: 22px; }
+.problem-spots li { margin: 4px 0; }
+.problem-spots .none { color: var(--muted); list-style: none; margin-left: -22px; }
+details.full-stats > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+details.full-stats[open] > summary { margin-bottom: 10px; }

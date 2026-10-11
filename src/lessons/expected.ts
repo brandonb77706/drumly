@@ -70,6 +70,12 @@ export function noteId(lessonId: string, pass: number, index: number): string {
   return `${lessonId}#${pass}.${index}`;
 }
 
+/** The index into lesson.notes encoded in a lesson note id, or null for ids not made by lessonToExpectedNotes. */
+export function noteIndex(id: string): number | null {
+  const match = /#\d+\.(\d+)$/.exec(id);
+  return match ? Number(match[1]) : null;
+}
+
 /** The pass number encoded in a lesson note id, or null for ids not made by lessonToExpectedNotes. */
 export function notePass(id: string): number | null {
   const match = /#(\d+)\.\d+$/.exec(id);

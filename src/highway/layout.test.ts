@@ -27,13 +27,21 @@ describe('noteToX', () => {
 });
 
 describe('computeLayout', () => {
-  it('puts the now line about 25% in and fits 2 s of upcoming notes to its right', () => {
-    const layout = computeLayout(1000, 300, 4);
-    expect(layout.nowX).toBe(250);
-    expect(noteToX(2000, 0, layout)).toBeCloseTo(1000, 9);
+  it('puts the now line 35% across the lane area and fits 1.5 s of upcoming notes to its right', () => {
+    const layout = computeLayout(1096, 300, 4, { labelWidth: 96 });
+    expect(layout.nowX).toBeCloseTo(96 + 350, 9);
+    expect(noteToX(1500, 0, layout)).toBeCloseTo(1096, 9);
+    expect(layout.pxPerMs).toBeCloseTo(650 / 1500, 9);
     const range = visibleTimeRange(0, layout);
-    expect(range.to).toBeCloseTo(2000, 9);
-    expect(range.from).toBeLessThan(0);
+    expect(range.to).toBeCloseTo(1500, 9);
+    // 35% of the lane area behind the line: 350 px at 650/1500 px per ms ≈ 808 ms of look-back.
+    expect(range.from).toBeCloseTo(-350 / (650 / 1500), 6);
+  });
+
+  it('now line position and look-ahead are configurable', () => {
+    const layout = computeLayout(1100, 300, 4, { labelWidth: 100, nowFraction: 0.5, futureMs: 1000 });
+    expect(layout.nowX).toBe(600);
+    expect(noteToX(1000, 0, layout)).toBeCloseTo(1100, 9);
   });
 
   it('never puts the now line inside the label gutter on a narrow screen', () => {
@@ -41,12 +49,20 @@ describe('computeLayout', () => {
     expect(layout.nowX).toBeGreaterThan(96);
   });
 
-  it('lanes and the "other" strip fill the height', () => {
-    const layout = computeLayout(800, 14 + 4.5 * 34, 4, { headerHeight: 14 });
+  it('lanes fill the height; the "other" lane is hidden by default', () => {
+    const layout = computeLayout(800, 14 + 4 * 34, 4, { headerHeight: 14 });
     expect(layout.laneHeight).toBeCloseTo(34, 9);
     expect(laneCenterY(0, layout)).toBeCloseTo(14 + 17, 9);
+    expect(layout.otherHeight).toBe(0);
+  });
+
+  it('the "other" lane, when shown, is as tall as the rest and fits inside the canvas', () => {
+    const layout = computeLayout(800, 14 + 5 * 34, 4, { headerHeight: 14, otherLane: true });
+    expect(layout.laneHeight).toBeCloseTo(34, 9);
+    expect(layout.otherHeight).toBeCloseTo(34, 9);
     expect(layout.otherTop).toBeCloseTo(14 + 4 * 34, 9);
     expect(layout.otherTop + layout.otherHeight).toBeCloseTo(layout.height, 9);
+    expect(laneCenterY(-1, layout)).toBeCloseTo(14 + 4.5 * 34, 9);
   });
 });
 

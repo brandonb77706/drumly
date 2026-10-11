@@ -1,6 +1,6 @@
 import type { Hit, Pad } from '../input';
 import type { ExpectedNote, GradeResult, HitVerdict, TimingGrade } from '../grading';
-import { lessonToExpectedNotes, type ClickTime, type Lesson } from '../lessons';
+import { lessonToExpectedNotes, noteIndex, type ClickTime, type Lesson, type LessonPosition } from '../lessons';
 import { lanesForLesson, laneForPad } from './layout';
 
 /** What a note on the highway currently shows. */
@@ -8,6 +8,8 @@ export type NoteState = 'pending' | TimingGrade | 'wrongPad' | 'missed';
 
 export interface HighwayNote {
   readonly id: string;
+  /** Index into lesson.notes (-1 if unknown). */
+  readonly lessonIndex: number;
   readonly pad: Pad;
   readonly lane: number;
   readonly accent: boolean;
@@ -31,13 +33,23 @@ export interface GridLine {
   time: number;
 }
 
-/** A hit drawn as a tick at its real time. */
+/** A hit drawn as a tick at its real time, in the lane of the pad actually played. */
 export interface HitTick {
   readonly hit: Hit;
-  /** Lane index, or -1 for the "other" strip. */
+  /** Lane index, or -1 for the "other" lane. */
   lane: number;
   /** The matched note's state, or 'extra'. */
   state: NoteState | 'extra';
+}
+
+/** The focus range of one pass, for shading. */
+export interface FocusRegion {
+  readonly pass: number;
+  /** Time of the focus start and end positions. */
+  start: number;
+  end: number;
+  /** Half a grid step, so shading covers the first and last notes fully. */
+  padMs: number;
 }
 
 /** A metronome click as the highway needs it. MetronomeClick satisfies this. */
@@ -76,6 +88,10 @@ export class HighwayModel {
   /** In time order. */
   readonly lines: GridLine[] = [];
   readonly ticks: HitTick[] = [];
+  /** In pass order. */
+  readonly focusRegions: FocusRegion[] = [];
+  /** Becomes true once a hit lands on a pad with no lane; the "other" lane is shown from then on. */
+  hasOtherLane = false;
 
   private readonly passes: number;
   private readonly pastMs: number;
@@ -86,6 +102,8 @@ export class HighwayModel {
   private readonly tickByHit = new Map<Hit, HitTick>();
   /** Which note each hit was last matched to. */
   private readonly noteByHit = new Map<Hit, HighwayNote>();
+  private readonly regionByPass = new Map<number, FocusRegion>();
+  private highlighted: ReadonlySet<number> = new Set();
   private lastRefresh = -Infinity;
   private keepFrom = -Infinity;
 
@@ -125,6 +143,7 @@ export class HighwayModel {
         this.lines.push(created);
       }
     }
+    this.updateFocusRegions(clicks);
     for (const expected of lessonToExpectedNotes(this.lesson, clicks, { passes: this.passes })) {
       const note = this.noteById.get(expected.id);
       if (note) note.time = expected.time;
@@ -135,6 +154,15 @@ export class HighwayModel {
     this.lines.sort(byTime);
     this.notes.sort(byTime);
     return true;
+  }
+
+  /** Ring these notes (indices into lesson.notes) while they are still to be played. */
+  setHighlights(lessonIndices: Iterable<number>): void {
+    this.highlighted = new Set(lessonIndices);
+  }
+
+  isHighlighted(note: HighwayNote): boolean {
+    return this.highlighted.has(note.lessonIndex);
   }
 
   /** Apply a grader verdict for a hit (from a 'hit' or 'revised' event). */
@@ -155,8 +183,10 @@ export class HighwayModel {
       this.ticks.push(tick);
     }
 
+    // The tick goes where the player actually hit; for a wrong pad that's not the note's lane.
+    tick.lane = this.laneOf(hit.pad);
+    if (tick.lane < 0) this.hasOtherLane = true;
     if (verdict.status === 'extra') {
-      tick.lane = this.laneOf(hit.pad);
       tick.state = 'extra';
       return;
     }
@@ -164,7 +194,6 @@ export class HighwayModel {
     note.hit = hit;
     note.state = verdict.status === 'wrongPad' ? 'wrongPad' : verdict.timing;
     this.noteByHit.set(hit, note);
-    tick.lane = note.lane;
     tick.state = note.state;
   }
 
@@ -213,6 +242,7 @@ export class HighwayModel {
   private addNote(expected: ExpectedNote): HighwayNote {
     const note: HighwayNote = {
       id: expected.id,
+      lessonIndex: noteIndex(expected.id) ?? -1,
       pad: expected.pad,
       lane: this.laneOf(expected.pad),
       accent: (expected.velocity ?? 0) >= ACCENT_VELOCITY,
@@ -227,8 +257,38 @@ export class HighwayModel {
     return note;
   }
 
+  /** Find the clicks at the focus start and end positions of each pass. */
+  private updateFocusRegions(clicks: readonly HighwayClick[]): void {
+    const focus = this.lesson.focus;
+    if (!focus) return;
+    const bars = this.lesson.bars;
+    clicks.forEach((click, i) => {
+      if (click.isCountIn || click.bar < 0) return;
+      const pass = Math.floor(click.bar / bars);
+      if (pass >= this.passes) return;
+      const position = { bar: click.bar % bars, beat: click.beat, subdivision: click.subdivision };
+      const isStart = samePosition(position, focus.start);
+      const isEnd = samePosition(position, focus.end);
+      if (!isStart && !isEnd) return;
+      let region = this.regionByPass.get(pass);
+      if (!region) {
+        region = { pass, start: NaN, end: NaN, padMs: 0 };
+        this.regionByPass.set(pass, region);
+        this.focusRegions.push(region);
+        this.focusRegions.sort((a, b) => a.pass - b.pass);
+      }
+      if (isStart) {
+        region.start = click.time;
+        const next = clicks[i + 1];
+        if (next) region.padMs = (next.time - click.time) / 2;
+      }
+      if (isEnd) region.end = click.time;
+    });
+  }
+
   private prune(): void {
     const keepFrom = this.keepFrom;
+    removeWhere(this.focusRegions, (r) => r.end < keepFrom, (r) => this.regionByPass.delete(r.pass));
     removeWhere(this.notes, (n) => n.time < keepFrom, (n) => this.noteById.delete(n.id));
     removeWhere(this.lines, (l) => l.time < keepFrom, (l) => this.lineByIndex.delete(l.index));
     removeWhere(this.ticks, (t) => t.hit.time < keepFrom, (t) => {
@@ -236,6 +296,10 @@ export class HighwayModel {
       this.noteByHit.delete(t.hit);
     });
   }
+}
+
+function samePosition(a: LessonPosition, b: LessonPosition): boolean {
+  return a.bar === b.bar && a.beat === b.beat && a.subdivision === b.subdivision;
 }
 
 function byTime(a: { time: number }, b: { time: number }): number {

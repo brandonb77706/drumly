@@ -45,6 +45,8 @@ export class ClickScheduler {
   private nextIndex = 0;
   /** Most recently handed-out click; pending changes are committed relative to it. */
   private lastClick: GridClick | null = null;
+  /** Changes to apply from the first click of a given bar (see updateAtBar). */
+  private pendingAtBar: { bar: number; changes: Partial<MetronomeSettings> } | null = null;
 
   constructor(settings: Partial<MetronomeSettings> = {}) {
     this.settings = normalize({ ...DEFAULT_SETTINGS, ...settings });
@@ -56,6 +58,25 @@ export class ClickScheduler {
 
   update(changes: Partial<MetronomeSettings>): void {
     this.settings = normalize({ ...this.settings, ...changes });
+  }
+
+  /**
+   * Apply `changes` from the downbeat of `bar` onward, through the same commit path as update(),
+   * so nothing is moved or doubled. Unlike update(), the gap leading into that downbeat keeps
+   * the old tempo, so the downbeat is exactly where the old tempo puts it. Returns false
+   * (and changes nothing) if that downbeat has already been handed out or the scheduler isn't
+   * running. A later call replaces an earlier pending one.
+   */
+  updateAtBar(bar: number, changes: Partial<MetronomeSettings>): boolean {
+    if (!this.segment || bar < this.nextUnscheduledBar()) return false;
+    this.pendingAtBar = { bar, changes };
+    return true;
+  }
+
+  /** First bar whose downbeat has not been handed out yet (the earliest bar updateAtBar accepts). */
+  nextUnscheduledBar(): number {
+    if (!this.segment) return Infinity;
+    return (this.lastClick ?? this.segment).bar + 1;
   }
 
   get isRunning(): boolean {
@@ -87,6 +108,7 @@ export class ClickScheduler {
   stop(): void {
     this.segment = null;
     this.lastClick = null;
+    this.pendingAtBar = null;
   }
 
   /** Hand out every not-yet-scheduled click with time < horizon, in order. */
@@ -115,6 +137,7 @@ export class ClickScheduler {
     clone.segment = { ...this.segment };
     clone.nextIndex = this.nextIndex;
     clone.lastClick = this.lastClick;
+    clone.pendingAtBar = this.pendingAtBar;
     return clone.scheduleUntil(horizon, maxClicks);
   }
 
@@ -135,6 +158,13 @@ export class ClickScheduler {
       nextBar++;
     }
 
+    const pending = this.pendingAtBar;
+    const atPendingBar = pending !== null && barBoundary && nextBar >= pending.bar;
+    if (atPendingBar) {
+      this.settings = normalize({ ...this.settings, ...pending.changes });
+      this.pendingAtBar = null;
+    }
+
     const s = this.settings;
     const leavingCountIn = seg.countIn && nextBar >= 0;
     const beatsPerBarChanged = barBoundary && s.beatsPerBar !== seg.beatsPerBar;
@@ -146,8 +176,10 @@ export class ClickScheduler {
       leavingCountIn;
     if (!changed) return;
 
-    // The gap into the new beat: the old beat's subdivision at the new tempo.
-    const gap = secondsPerClick(s.bpm, seg.countIn ? 'quarter' : seg.subdivision);
+    // The gap into the new beat: the old beat's subdivision at the new tempo. A change booked
+    // for a bar (updateAtBar) keeps the old tempo up to that downbeat, so the previous bar (e.g. a
+    // lesson pass) is played entirely at its own tempo and the new one starts exactly on the 1.
+    const gap = secondsPerClick(atPendingBar ? seg.bpm : s.bpm, seg.countIn ? 'quarter' : seg.subdivision);
     this.segment = {
       startIndex: this.nextIndex,
       startTime: click.time + gap,

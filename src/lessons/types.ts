@@ -16,6 +16,22 @@ export interface LessonNote {
 
 export type LessonCategory = 'beat' | 'fill';
 
+/** A position in a lesson, 0-based like LessonNote. */
+export interface LessonPosition {
+  readonly bar: number;
+  readonly beat: number;
+  readonly subdivision: number;
+}
+
+/**
+ * The part of a lesson being learned, start and end inclusive (e.g. a fill plus its landing).
+ * Everything is still played and graded, but headline accuracy counts only notes inside it.
+ */
+export interface LessonFocus {
+  readonly start: LessonPosition;
+  readonly end: LessonPosition;
+}
+
 /** A lesson in musical terms, so it plays at any tempo. */
 export interface Lesson {
   readonly id: string;
@@ -30,6 +46,8 @@ export interface Lesson {
   readonly notes: readonly LessonNote[];
   /** Pads that count as the same for this lesson, e.g. [ANY_HIHAT] for beginner beats. */
   readonly equivalentPads?: readonly (readonly Pad[])[];
+  /** The part being learned; see LessonFocus. */
+  readonly focus?: LessonFocus;
   /** The text the lesson was written in, if any (shown to the player). */
   readonly source?: string;
 }

@@ -299,3 +299,24 @@ describe('click mode', () => {
     expect(clicks.length).toBeGreaterThan(before);
   });
 });
+
+describe('setBpmAtBar', () => {
+  it('changes the tempo at that bar without moving or doubling any click, and getGrid sees it in advance', async () => {
+    const { metronome, clicks, advance, oscillatorStarts } = await rig({ bpm: 120, beatsPerBar: 4, subdivision: 'eighth', countIn: true });
+    advance(0.5);
+    expect(metronome.nextUnscheduledBar()).toBe(0);
+    expect(metronome.setBpmAtBar(60, 2)).toBe(true);
+    // Projected grid already shows bar 2 at the new tempo.
+    const projected = metronome.getGrid(-Infinity, clicks[0]!.time + 12_000);
+    advance(12);
+    const bar2 = clicks.findIndex((c) => c.bar === 2 && c.beat === 0 && c.subdivision === 0);
+    expect(clicks[bar2]!.time - clicks[bar2 - 1]!.time).toBeCloseTo(250, 6); // old 8th
+    expect(clicks[bar2 + 1]!.time - clicks[bar2]!.time).toBeCloseTo(500, 6); // new 8th
+    expect(new Set(oscillatorStarts).size).toBe(oscillatorStarts.length); // no double clicks
+    for (const p of projected) {
+      const real = clicks.find((c) => c.index === p.index);
+      if (real) expect(real.time).toBeCloseTo(p.time, 6);
+    }
+    expect(metronome.setBpmAtBar(90, 1)).toBe(false); // already played
+  });
+});

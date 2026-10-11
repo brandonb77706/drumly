@@ -1,6 +1,6 @@
 import { PADS, type Pad } from '../input';
 import { clicksPerBeat, type Subdivision } from '../metronome/timing';
-import type { Lesson, LessonCategory, LessonNote } from './types';
+import type { Lesson, LessonCategory, LessonFocus, LessonNote, LessonPosition } from './types';
 
 /**
  * Short pad names for the lesson text format. Full pad names (e.g. "hihatClosed") also work.
@@ -123,6 +123,7 @@ export interface LessonSpec {
   text: string;
   bars?: number;
   equivalentPads?: readonly (readonly Pad[])[];
+  focus?: LessonFocus;
 }
 
 /** Build a Lesson from the text format. Throws LessonParseError with a clear message on bad input. */
@@ -143,8 +144,24 @@ export function lessonFromText(spec: LessonSpec): Lesson {
     subdivision: spec.subdivision,
     notes,
     ...(spec.equivalentPads ? { equivalentPads: spec.equivalentPads } : {}),
+    ...(spec.focus ? { focus: checkFocus(spec.focus, { beatsPerBar: spec.beatsPerBar, subdivision: spec.subdivision, bars }) } : {}),
     source: spec.text.trim(),
   };
+}
+
+function checkFocus(focus: LessonFocus, grid: { beatsPerBar: number; subdivision: Subdivision; bars: number }): LessonFocus {
+  const stepsPerBeat = clicksPerBeat(grid.subdivision);
+  const step = (p: LessonPosition, name: string) => {
+    const ok =
+      [p.bar, p.beat, p.subdivision].every(Number.isInteger) &&
+      p.bar >= 0 && p.bar < grid.bars &&
+      p.beat >= 0 && p.beat < grid.beatsPerBar &&
+      p.subdivision >= 0 && p.subdivision < stepsPerBeat;
+    if (!ok) throw new LessonParseError(`Focus ${name} (bar ${p.bar}, beat ${p.beat}, step ${p.subdivision}) is outside the lesson's grid.`);
+    return (p.bar * grid.beatsPerBar + p.beat) * stepsPerBeat + p.subdivision;
+  };
+  if (step(focus.start, 'start') > step(focus.end, 'end')) throw new LessonParseError('Focus start is after focus end.');
+  return focus;
 }
 
 /** Render a lesson back to the text format (one line per pad, bars separated by " | "). */

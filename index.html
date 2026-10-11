@@ -34,10 +34,24 @@
             </select>
           </label>
           <label class="check"><input id="lesson-loop" type="checkbox" /> Loop</label>
+          <label class="check" title="Loop, speeding up only once the fill is clean"><input id="lesson-trainer" type="checkbox" /> Trainer</label>
           <button id="lesson-preview" type="button">Preview</button>
           <button id="lesson-start" type="button" class="primary">Start</button>
         </div>
+        <div id="trainer-settings" class="trainer-settings" hidden>
+          <label>Start BPM <input id="trainer-start" type="number" min="30" max="300" step="1" /></label>
+          <label>Target BPM <input id="trainer-target" type="number" min="30" max="300" step="1" /></label>
+          <label>Step (BPM) <input id="trainer-step" type="number" min="1" max="50" step="1" value="5" /></label>
+          <label>Clean pass (%) <input id="trainer-threshold" type="number" min="1" max="100" step="1" value="90" /></label>
+          <label>Clean passes needed <input id="trainer-passes" type="number" min="1" max="10" step="1" value="2" /></label>
+        </div>
         <p id="lesson-description" class="lesson-description"></p>
+        <div id="trainer-status" class="trainer-status" hidden>
+          <span id="trainer-bpm" class="trainer-bpm"></span>
+          <span id="trainer-progress" class="trainer-progress"></span>
+          <span id="trainer-message" class="trainer-message"></span>
+          <button id="problem-refresh" type="button">Show problem spots</button>
+        </div>
         <canvas id="highway" class="highway" aria-label="Note highway: upcoming notes scroll toward the now line"></canvas>
         <div class="met-top">
           <div id="beats" class="beats" aria-label="Beat indicator"></div>
@@ -48,6 +62,10 @@
         <p id="lesson-status" class="grade-status"></p>
         <p id="lesson-feedback" class="lesson-feedback"></p>
         <div id="lesson-history" class="lesson-history"></div>
+        <div id="problem-spots" class="problem-spots" hidden>
+          <h3>Problem spots</h3>
+          <ol id="problem-list"></ol>
+        </div>
         <div id="lesson-summary"></div>
         <details class="lesson-text">
           <summary>Pattern as text</summary>

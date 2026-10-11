@@ -1,5 +1,6 @@
 import type { Pad } from '../input';
 import type { GradeStats, GradeSummary } from '../grading';
+import { formatMsStat } from './format';
 
 export const PAD_LABELS: Record<Pad, string> = {
   kick: 'Kick',
@@ -19,7 +20,7 @@ export const PAD_LABELS: Record<Pad, string> = {
 };
 
 export function fmtMs(v: number | null): string {
-  return v === null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(1)}`;
+  return formatMsStat(v);
 }
 
 export function fmtPct(v: number | null): string {

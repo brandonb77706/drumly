@@ -26,7 +26,7 @@ The kit is unavailable until about Oct 25, 2026. Until then, build and test with
 3. Comparison engine: match hits to expected notes, grade pad and timing - DONE
 4. First lessons (3 or 4 simple beats) graded live - DONE
 5. Note highway display - DONE
-6. Fills as lessons with auto tempo increase
+6. Fills as lessons with auto tempo increase - DONE
 7. Post-session analysis plus Claude API coaching (Jarvis voice optional)
 8. MIDI file import for songs with section looping
 9. Save sessions and chart progress over time

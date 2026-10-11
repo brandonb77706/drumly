@@ -171,6 +171,19 @@ export class Metronome {
     this.scheduler.update({ bpm });
   }
 
+  /**
+   * Change the tempo exactly at the downbeat of metronome bar `bar` (e.g. the start of the next
+   * lesson pass). Returns false if that downbeat is already scheduled; pick a later bar then.
+   */
+  setBpmAtBar(bpm: number, bar: number): boolean {
+    return this.scheduler.updateAtBar(bar, { bpm });
+  }
+
+  /** First bar whose downbeat hasn't been scheduled yet (Infinity when stopped). */
+  nextUnscheduledBar(): number {
+    return this.scheduler.nextUnscheduledBar();
+  }
+
   /** While playing, takes effect from the next bar. */
   setBeatsPerBar(beats: number): void {
     this.scheduler.update({ beatsPerBar: beats });
